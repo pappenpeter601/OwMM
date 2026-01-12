@@ -1,0 +1,3 @@
+# Logs directory
+*.log
+error.log
