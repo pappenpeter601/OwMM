@@ -36,22 +36,6 @@ CREATE TABLE IF NOT EXISTS `page_content` (
   CONSTRAINT `page_content_ibfk_1` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Board members
-CREATE TABLE IF NOT EXISTS `board_members` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `first_name` varchar(50) NOT NULL,
-  `last_name` varchar(50) NOT NULL,
-  `position` varchar(100) NOT NULL,
-  `image_url` varchar(255) DEFAULT NULL,
-  `bio` text,
-  `email` varchar(100) DEFAULT NULL,
-  `phone` varchar(20) DEFAULT NULL,
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `active` tinyint(1) NOT NULL DEFAULT 1,
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- Operations/Einsätze
 CREATE TABLE IF NOT EXISTS `operations` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -205,7 +189,7 @@ CREATE TABLE IF NOT EXISTS `transaction_documents` (
 CREATE TABLE IF NOT EXISTS `members` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `member_number` varchar(20) DEFAULT NULL,
-  `member_type` enum('active','supporter') NOT NULL COMMENT 'active=Einsatzeinheit, supporter=Förderer',
+  `member_type` enum('active','supporter','pensioner') NOT NULL COMMENT 'active=Einsatzeinheit, supporter=Förderer, pensioner=Altersabteilung',
   `salutation` varchar(20) DEFAULT NULL,
   `first_name` varchar(50) NOT NULL,
   `last_name` varchar(50) NOT NULL,
@@ -218,6 +202,10 @@ CREATE TABLE IF NOT EXISTS `members` (
   `join_date` date DEFAULT NULL,
   `end_date` date DEFAULT NULL COMMENT 'Date when member left/became inactive',
   `active` tinyint(1) NOT NULL DEFAULT 1,
+  `board_position` varchar(100) DEFAULT NULL COMMENT 'Position on the board/command',
+  `board_image_url` varchar(255) DEFAULT NULL COMMENT 'Photo for board display',
+  `board_sort_order` int(11) DEFAULT 0 COMMENT 'Sort order for board display',
+  `is_board_member` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Whether member is displayed on board/command page',
   `notes` text,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -225,13 +213,14 @@ CREATE TABLE IF NOT EXISTS `members` (
   UNIQUE KEY `member_number` (`member_number`),
   KEY `member_type` (`member_type`),
   KEY `active` (`active`),
+  KEY `is_board_member` (`is_board_member`),
   KEY `last_name` (`last_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Membership fees (with validity periods)
 CREATE TABLE IF NOT EXISTS `membership_fees` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
-  `member_type` enum('active','supporter') NOT NULL,
+  `member_type` enum('active','supporter','pensioner') NOT NULL,
   `minimum_amount` decimal(10,2) NOT NULL,
   `valid_from` date NOT NULL,
   `valid_until` date DEFAULT NULL COMMENT 'NULL means currently valid',
@@ -322,3 +311,64 @@ INSERT INTO `membership_fees` (`member_type`, `minimum_amount`, `valid_from`, `v
 ('active', 10.00, '2002-01-01', '2024-12-31', 'Jahresbeitrag Einsatzeinheit'),
 ('active', 20.00, '2025-01-01', null, 'Jahresbeitrag Einsatzeinheit'),
 ('supporter', 30.00, '2002-01-01', null, 'Jahresbeitrag Förderer');
+
+-- Insert initial balance / opening balance
+INSERT INTO `transactions` (`booking_date`, `booking_text`, `amount`, `business_year`, `comment`) VALUES
+('2023-12-31', 'Startsaldo / Anfangsbestand', 9903.38, 2023, 'Anfangsbestand zum Start der Buchführung');
+
+-- Items (equipment/goods that can be lent or rented)
+CREATE TABLE IF NOT EXISTS `items` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) NOT NULL,
+  `remark` text DEFAULT NULL,
+  `price` decimal(10,2) NOT NULL DEFAULT 0.00 COMMENT 'Price per usage/rental',
+  `active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `name` (`name`),
+  KEY `active` (`active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Obligations for items (lending/rental charges)
+CREATE TABLE IF NOT EXISTS `item_obligations` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `member_id` int(11) DEFAULT NULL COMMENT 'Receiver if they are a member, NULL for non-member receivers',
+  `receiver_name` varchar(100) DEFAULT NULL COMMENT 'Name of receiver (required if member_id is NULL)',
+  `receiver_phone` varchar(20) DEFAULT NULL,
+  `receiver_email` varchar(100) DEFAULT NULL,
+  `organizing_member_id` int(11) DEFAULT NULL COMMENT 'Member who organized/brokered the deal',
+  `total_amount` decimal(10,2) NOT NULL,
+  `paid_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `status` enum('open','paid','cancelled') NOT NULL DEFAULT 'open',
+  `notes` text,
+  `due_date` date DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `member_id` (`member_id`),
+  KEY `organizing_member_id` (`organizing_member_id`),
+  KEY `status` (`status`),
+  KEY `created_at` (`created_at`),
+  KEY `created_by` (`created_by`),
+  CONSTRAINT `item_obligations_ibfk_1` FOREIGN KEY (`member_id`) REFERENCES `members` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `item_obligations_ibfk_2` FOREIGN KEY (`organizing_member_id`) REFERENCES `members` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `item_obligations_ibfk_3` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Line items within an obligation (which items are included and quantities)
+CREATE TABLE IF NOT EXISTS `obligation_items` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `obligation_id` int(11) NOT NULL,
+  `item_id` int(11) NOT NULL,
+  `quantity` int(11) NOT NULL DEFAULT 1,
+  `unit_price` decimal(10,2) NOT NULL COMMENT 'Price per unit at time of obligation creation',
+  `subtotal` decimal(10,2) NOT NULL COMMENT 'quantity * unit_price',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `obligation_id` (`obligation_id`),
+  KEY `item_id` (`item_id`),
+  CONSTRAINT `obligation_items_ibfk_1` FOREIGN KEY (`obligation_id`) REFERENCES `item_obligations` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `obligation_items_ibfk_2` FOREIGN KEY (`item_id`) REFERENCES `items` (`id`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

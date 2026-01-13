@@ -41,8 +41,8 @@ include 'includes/header.php';
     
     <div class="dashboard-card">
         <div class="card-icon">👥</div>
-        <h3>Vorstandschaft</h3>
-        <p>Vorstandsmitglieder verwalten</p>
+        <h3>Kommando</h3>
+        <p>Kommandomitglieder verwalten</p>
         <a href="board.php" class="btn btn-primary">Verwalten</a>
     </div>
     <?php endif; ?>
@@ -83,6 +83,20 @@ include 'includes/header.php';
         <h3>Beitragsforderungen</h3>
         <p>Jahresbeiträge generieren und verwalten</p>
         <a href="generate_obligations.php" class="btn btn-primary">Verwalten</a>
+    </div>
+    
+    <div class="dashboard-card">
+        <div class="card-icon">📦</div>
+        <h3>Artikel</h3>
+        <p>Artikel und Gegenstände verwalten</p>
+        <a href="items.php" class="btn btn-primary">Verwalten</a>
+    </div>
+    
+    <div class="dashboard-card">
+        <div class="card-icon">🔗</div>
+        <h3>Artikelverpflichtungen</h3>
+        <p>Artikel-Verpflichtungen erstellen und verwalten</p>
+        <a href="outstanding_obligations.php" class="btn btn-primary">Verwalten</a>
     </div>
     <?php endif; ?>
 </div>
@@ -134,7 +148,7 @@ include 'includes/header.php';
                     <div class="stat-label">Transaktionen</div>
                   </div>
                   <div class="stat-box">
-                    <div class="stat-number" style="color: ' . ($balance >= 0 ? '#4caf50' : '#f44336') . '">' . number_format($balance, 2, ',', '.') . ' €</div>
+                    <div class="stat-number" style="color: ' . ($balance >= 0 ? '#4caf50' : '#f44336') . '; font-size: 1.8rem;">' . number_format($balance, 2, ',', '.') . ' €</div>
                     <div class="stat-label">Gesamtsaldo</div>
                   </div>';
             
@@ -155,23 +169,34 @@ include 'includes/header.php';
                     <div class="stat-label">Förderer</div>
                   </div>';
             
-            // Outstanding payments for current year
-            $current_year = date('Y');
-            $outstanding_obligations = get_open_obligations($current_year);
-            $outstanding_count = count($outstanding_obligations);
-            $outstanding_amount = array_sum(array_column($outstanding_obligations, 'outstanding'));
+            // Outstanding payments - all years
+            $stmt = $db->query("
+                SELECT 
+                    COUNT(DISTINCT m.id) as count,
+                    COALESCE(SUM(o.amount - COALESCE(p.total_paid, 0)), 0) as total_outstanding
+                FROM members m
+                LEFT JOIN obligations o ON m.id = o.member_id
+                LEFT JOIN (
+                    SELECT member_id, obligation_id, SUM(amount) as total_paid
+                    FROM member_payments
+                    GROUP BY member_id, obligation_id
+                ) p ON o.member_id = p.member_id AND o.id = p.obligation_id
+                WHERE m.active = 1 
+                    AND o.amount > COALESCE(p.total_paid, 0)
+            ");
+            $outstanding_stats = $stmt->fetch();
+            $outstanding_count = $outstanding_stats['count'];
+            $outstanding_amount = $outstanding_stats['total_outstanding'];
             
             echo '<div class="stat-box">
                     <div class="stat-number" style="color: ' . ($outstanding_count > 0 ? '#ff9800' : '#4caf50') . '">' . $outstanding_count . '</div>
-                    <div class="stat-label">Offene Forderungen ' . $current_year . '</div>
+                    <div class="stat-label">Offene Forderungen</div>
                   </div>';
             
-            if ($outstanding_amount > 0) {
-                echo '<div class="stat-box">
-                        <div class="stat-number" style="color: #ff9800">' . number_format($outstanding_amount, 2, ',', '.') . ' €</div>
-                        <div class="stat-label">Ausstehender Betrag</div>
-                      </div>';
-            }
+            echo '<div class="stat-box">
+                    <div class="stat-number" style="color: ' . ($outstanding_amount > 0 ? '#ff9800' : '#4caf50') . '; font-size: 1.8rem;">' . number_format($outstanding_amount, 2, ',', '.') . ' €</div>
+                    <div class="stat-label">Ausstehender Betrag</div>
+                  </div>';
         }
         ?>
     </div>

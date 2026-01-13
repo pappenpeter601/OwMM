@@ -141,6 +141,14 @@ $business_year_filter = $_GET['business_year'] ?? '';
 $start_date = $_GET['start_date'] ?? '';
 $end_date = $_GET['end_date'] ?? '';
 
+// Convert German date format (dd.mm.yyyy) to SQL format (yyyy-mm-dd)
+if ($start_date && preg_match('/^(\d{2})\.(\d{2})\.(\d{4})$/', $start_date, $matches)) {
+    $start_date = $matches[3] . '-' . $matches[2] . '-' . $matches[1];
+}
+if ($end_date && preg_match('/^(\d{2})\.(\d{2})\.(\d{4})$/', $end_date, $matches)) {
+    $end_date = $matches[3] . '-' . $matches[2] . '-' . $matches[1];
+}
+
 // Get transactions with category info
 $sql = "SELECT t.*, tc.id as cat_id, tc.name as cat_name, tc.color as cat_color, tc.icon as cat_icon 
         FROM transactions t 
@@ -182,6 +190,33 @@ $categories = $stmt->fetchAll();
 $stmt = $db->query("SELECT DISTINCT business_year FROM transactions WHERE business_year IS NOT NULL ORDER BY business_year DESC");
 $business_years = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
+// Calculate start and end saldo if date filter is used
+$start_saldo = null;
+$end_saldo = null;
+
+if ($start_date || $end_date) {
+    // Calculate start saldo (all transactions before start_date)
+    if ($start_date) {
+        $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as saldo FROM transactions WHERE booking_date < :start_date");
+        $stmt->execute(['start_date' => $start_date]);
+        $start_saldo = $stmt->fetchColumn();
+    } else {
+        // If only end_date is set, start from 0
+        $start_saldo = 0;
+    }
+    
+    // Calculate end saldo (all transactions up to end_date, or all if no end_date)
+    if ($end_date) {
+        $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as saldo FROM transactions WHERE booking_date <= :end_date");
+        $stmt->execute(['end_date' => $end_date]);
+        $end_saldo = $stmt->fetchColumn();
+    } else {
+        // If only start_date is set, calculate up to today
+        $stmt = $db->query("SELECT COALESCE(SUM(amount), 0) as saldo FROM transactions");
+        $end_saldo = $stmt->fetchColumn();
+    }
+}
+
 // Calculate totals
 $total_income = 0;
 $total_expense = 0;
@@ -211,6 +246,12 @@ include 'includes/header.php';
 
 <!-- Summary Cards -->
 <div class="summary-cards">
+    <?php if ($start_saldo !== null): ?>
+    <div class="card">
+        <div class="card-label">Startsaldo<?php echo $start_date ? ' (' . date('d.m.Y', strtotime($start_date)) . ')' : ''; ?></div>
+        <div class="card-value <?php echo $start_saldo >= 0 ? 'income' : 'expense'; ?>"><?php echo number_format($start_saldo, 2, ',', '.'); ?> €</div>
+    </div>
+    <?php endif; ?>
     <div class="card">
         <div class="card-label">Gesamte Einnahmen</div>
         <div class="card-value income"><?php echo number_format($total_income, 2, ',', '.'); ?> €</div>
@@ -225,6 +266,12 @@ include 'includes/header.php';
             <?php echo number_format($total_income - $total_expense, 2, ',', '.'); ?> €
         </div>
     </div>
+    <?php if ($end_saldo !== null): ?>
+    <div class="card">
+        <div class="card-label">Endsaldo<?php echo $end_date ? ' (' . date('d.m.Y', strtotime($end_date)) . ')' : ''; ?></div>
+        <div class="card-value <?php echo $end_saldo >= 0 ? 'income' : 'expense'; ?>"><?php echo number_format($end_saldo, 2, ',', '.'); ?> €</div>
+    </div>
+    <?php endif; ?>
 </div>
 
 <!-- Import Section -->
@@ -277,11 +324,15 @@ include 'includes/header.php';
             </div>
             <div class="form-group">
                 <label for="start_date">Von Datum</label>
-                <input type="date" id="start_date" name="start_date" value="<?php echo htmlspecialchars($start_date); ?>">
+                <input type="text" id="start_date" name="start_date" placeholder="dd.mm.yyyy" 
+                       pattern="\d{2}\.\d{2}\.\d{4}" 
+                       value="<?php echo $start_date ? date('d.m.Y', strtotime($start_date)) : ''; ?>">
             </div>
             <div class="form-group">
                 <label for="end_date">Bis Datum</label>
-                <input type="date" id="end_date" name="end_date" value="<?php echo htmlspecialchars($end_date); ?>">
+                <input type="text" id="end_date" name="end_date" placeholder="dd.mm.yyyy" 
+                       pattern="\d{2}\.\d{2}\.\d{4}"
+                       value="<?php echo $end_date ? date('d.m.Y', strtotime($end_date)) : ''; ?>">
             </div>
             <div class="form-group">
                 <button type="submit" class="btn btn-secondary">Filtern</button>
@@ -324,7 +375,7 @@ include 'includes/header.php';
                             <form method="POST" class="inline-form">
                                 <input type="hidden" name="action" value="update_transaction">
                                 <input type="hidden" name="id" value="<?php echo $transaction['id']; ?>">
-                                <select name="category_id" class="category-select" onchange="this.form.submit()" style="min-width: 150px;">
+                                <select name="category_id" class="category-select" onchange="this.form.submit()">
                                     <option value="">—</option>
                                     <?php foreach ($categories as $cat): ?>
                                         <option value="<?php echo htmlspecialchars($cat['id']); ?>"
@@ -371,7 +422,7 @@ include 'includes/header.php';
                             <form method="POST" class="inline-form">
                                 <input type="hidden" name="action" value="update_transaction">
                                 <input type="hidden" name="id" value="<?php echo $transaction['id']; ?>">
-                                <textarea name="comment" placeholder="Notiz..." class="note-input" onchange="this.form.submit()" rows="2" style="min-height: 50px; min-width: 250px;"><?php echo htmlspecialchars($transaction['comment'] ?? ''); ?></textarea>
+                                <textarea name="comment" placeholder="Notiz..." class="note-input" onchange="this.form.submit()" rows="2"><?php echo htmlspecialchars($transaction['comment'] ?? ''); ?></textarea>
                             </form>
                         </td>
                         <td class="actions">

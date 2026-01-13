@@ -248,13 +248,16 @@ function get_event_images($event_id) {
 function get_board_members($active_only = true) {
     $db = getDBConnection();
     
-    $sql = "SELECT * FROM board_members WHERE 1=1";
+    $sql = "SELECT id, first_name, last_name, board_position as position, 
+                   board_image_url as image_url, email, telephone, mobile, active
+            FROM members 
+            WHERE member_type = 'active' AND is_board_member = 1";
     
     if ($active_only) {
         $sql .= " AND active = 1";
     }
     
-    $sql .= " ORDER BY sort_order ASC";
+    $sql .= " ORDER BY board_sort_order ASC, last_name ASC, first_name ASC";
     
     $stmt = $db->query($sql);
     return $stmt->fetchAll();
