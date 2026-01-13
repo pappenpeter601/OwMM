@@ -3,6 +3,11 @@ require_once '../config/config.php';
 require_once '../config/database.php';
 require_once '../includes/functions.php';
 
+// Start session if not already started
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
 // Check if user is admin or kassenpruefer
 if (!is_logged_in() || !can_edit_cash()) {
     header('Location: login.php');
@@ -10,8 +15,12 @@ if (!is_logged_in() || !can_edit_cash()) {
 }
 
 $db = getDBConnection();
-$message = '';
-$error = '';
+$message = $_SESSION['success_message'] ?? '';
+$error = $_SESSION['error_message'] ?? '';
+
+// Clear session messages after reading
+unset($_SESSION['success_message']);
+unset($_SESSION['error_message']);
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -22,19 +31,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $id = $_POST['id'] ?? null;
                 $data = [
                     'member_type' => $_POST['member_type'],
-                    'salutation' => $_POST['salutation'] ?? null,
+                    'salutation' => !empty($_POST['salutation']) ? $_POST['salutation'] : null,
                     'first_name' => $_POST['first_name'],
                     'last_name' => $_POST['last_name'],
-                    'street' => $_POST['street'] ?? null,
-                    'postal_code' => $_POST['postal_code'] ?? null,
-                    'city' => $_POST['city'] ?? null,
-                    'email' => $_POST['email'] ?? null,
-                    'telephone' => $_POST['telephone'] ?? null,
-                    'mobile' => $_POST['mobile'] ?? null,
-                    'member_number' => $_POST['member_number'] ?? null,
-                    'join_date' => $_POST['join_date'] ?? null,
+                    'street' => !empty($_POST['street']) ? $_POST['street'] : null,
+                    'postal_code' => !empty($_POST['postal_code']) ? $_POST['postal_code'] : null,
+                    'city' => !empty($_POST['city']) ? $_POST['city'] : null,
+                    'email' => !empty($_POST['email']) ? $_POST['email'] : null,
+                    'telephone' => !empty($_POST['telephone']) ? $_POST['telephone'] : null,
+                    'mobile' => !empty($_POST['mobile']) ? $_POST['mobile'] : null,
+                    'member_number' => !empty($_POST['member_number']) ? $_POST['member_number'] : null,
+                    'join_date' => !empty($_POST['join_date']) ? $_POST['join_date'] : null,
                     'active' => isset($_POST['active']) ? 1 : 0,
-                    'notes' => $_POST['notes'] ?? null
+                    'notes' => !empty($_POST['notes']) ? $_POST['notes'] : null
                 ];
                 
                 try {
@@ -59,7 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $data['id'] = $id;
                         $stmt = $db->prepare($sql);
                         $stmt->execute($data);
-                        $message = 'Mitglied erfolgreich aktualisiert.';
+                        $_SESSION['success_message'] = 'Mitglied erfolgreich aktualisiert.';
                     } else {
                         // Insert new member
                         $sql = "INSERT INTO members (member_type, salutation, first_name, last_name, street, postal_code, city, 
@@ -68,8 +77,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 :email, :telephone, :mobile, :member_number, :join_date, :active, :notes)";
                         $stmt = $db->prepare($sql);
                         $stmt->execute($data);
-                        $message = 'Mitglied erfolgreich hinzugefügt.';
+                        $_SESSION['success_message'] = 'Mitglied erfolgreich hinzugefügt.';
                     }
+                    header('Location: members.php');
+                    exit;
                 } catch (PDOException $e) {
                     $error = 'Fehler beim Speichern: ' . $e->getMessage();
                 }
@@ -83,13 +94,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $result = $stmt->fetch();
                 
                 if ($result['count'] > 0) {
-                    $error = 'Mitglied kann nicht gelöscht werden, da Beitragsforderungen vorhanden sind.';
+                    $_SESSION['error_message'] = 'Mitglied kann nicht gelöscht werden, da Beitragsforderungen vorhanden sind.';
                 } else {
                     $stmt = $db->prepare("DELETE FROM members WHERE id = :id");
                     $stmt->execute(['id' => $id]);
-                    $message = 'Mitglied erfolgreich gelöscht.';
+                    $_SESSION['success_message'] = 'Mitglied erfolgreich gelöscht.';
                 }
-                break;
+                header('Location: members.php');
+                exit;
                 
             case 'toggle_active':
                 $id = $_POST['id'];
@@ -110,26 +122,45 @@ $sql = "SELECT * FROM members WHERE 1=1";
 $params = [];
 
 if ($filter_type !== 'all') {
-    $sql .= " AND member_type = :member_type";
-    $params['member_type'] = $filter_type;
+    $sql .= " AND member_type = ?";
+    $params[] = $filter_type;
 }
 
 if ($search) {
-    $sql .= " AND (first_name LIKE :search OR last_name LIKE :search OR member_number LIKE :search OR email LIKE :search)";
-    $params['search'] = '%' . $search . '%';
+    // Use positional parameters for the search
+    $search_term = '%' . $search . '%';
+    $sql .= " AND (first_name LIKE ? OR last_name LIKE ? OR member_number LIKE ? OR email LIKE ?)";
+    $params[] = $search_term;
+    $params[] = $search_term;
+    $params[] = $search_term;
+    $params[] = $search_term;
 }
 
 $sql .= " ORDER BY active DESC, last_name, first_name";
 
 $stmt = $db->prepare($sql);
-$stmt->execute($params);
-$members = $stmt->fetchAll();
+
+// Debug: Log the query and params
+error_log("Query: " . $sql);
+error_log("Params: " . json_encode($params));
+
+try {
+    $stmt->execute($params);
+    $members = $stmt->fetchAll();
+} catch (PDOException $e) {
+    error_log("Query execution error: " . $e->getMessage());
+    error_log("Full query: " . $sql);
+    error_log("Params: " . json_encode($params));
+    $members = [];
+    $error = 'Fehler beim Abrufen der Mitglieder: ' . $e->getMessage();
+}
 
 // Get statistics
 $stmt = $db->query("SELECT 
                     COUNT(*) as total,
                     SUM(CASE WHEN member_type = 'active' AND active = 1 THEN 1 ELSE 0 END) as active_members,
                     SUM(CASE WHEN member_type = 'supporter' AND active = 1 THEN 1 ELSE 0 END) as supporters,
+                    SUM(CASE WHEN member_type = 'pensioner' AND active = 1 THEN 1 ELSE 0 END) as pensioners,
                     SUM(CASE WHEN active = 0 THEN 1 ELSE 0 END) as inactive
                     FROM members");
 $stats = $stmt->fetch();
@@ -175,6 +206,16 @@ include 'includes/header.php';
     </div>
     
     <div class="stat-card">
+        <div class="stat-icon" style="background: #9c27b0;">
+            <i class="fas fa-user-friends"></i>
+        </div>
+        <div class="stat-info">
+            <div class="stat-value"><?= $stats['pensioners'] ?></div>
+            <div class="stat-label">Altersabteilung</div>
+        </div>
+    </div>
+    
+    <div class="stat-card">
         <div class="stat-icon" style="background: #ff9800;">
             <i class="fas fa-user-check"></i>
         </div>
@@ -204,6 +245,7 @@ include 'includes/header.php';
                 <option value="all" <?= $filter_type === 'all' ? 'selected' : '' ?>>Alle</option>
                 <option value="active" <?= $filter_type === 'active' ? 'selected' : '' ?>>Einsatzeinheit</option>
                 <option value="supporter" <?= $filter_type === 'supporter' ? 'selected' : '' ?>>Förderer</option>
+                <option value="pensioner" <?= $filter_type === 'pensioner' ? 'selected' : '' ?>>Altersabteilung</option>
             </select>
         </div>
         
@@ -233,6 +275,7 @@ include 'includes/header.php';
                 <th>Nr.</th>
                 <th>Name</th>
                 <th>Typ</th>
+                <th>Adresse</th>
                 <th>Kontakt</th>
                 <th>Beitritt</th>
                 <th>Status</th>
@@ -242,7 +285,7 @@ include 'includes/header.php';
         <tbody>
             <?php if (empty($members)): ?>
                 <tr>
-                    <td colspan="7" style="text-align: center;">Keine Mitglieder gefunden.</td>
+                    <td colspan="8" style="text-align: center;">Keine Mitglieder gefunden.</td>
                 </tr>
             <?php else: ?>
                 <?php foreach ($members as $member): ?>
@@ -259,6 +302,17 @@ include 'includes/header.php';
                                 <span class="badge badge-primary">Einsatzeinheit</span>
                             <?php else: ?>
                                 <span class="badge badge-info">Förderer</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php if ($member['street']): ?>
+                                <?= htmlspecialchars($member['street']) ?><br>
+                            <?php endif; ?>
+                            <?php if ($member['postal_code'] || $member['city']): ?>
+                                <small><?= htmlspecialchars(trim(($member['postal_code'] ?? '') . ' ' . ($member['city'] ?? ''))) ?></small>
+                            <?php endif; ?>
+                            <?php if (!$member['street'] && !$member['postal_code'] && !$member['city']): ?>
+                                <small style="color: #999;">-</small>
                             <?php endif; ?>
                         </td>
                         <td>
@@ -317,16 +371,11 @@ include 'includes/header.php';
                     
                     <div class="form-group">
                         <label>Typ: *</label>
-                        <div class="radio-group">
-                            <label>
-                                <input type="radio" name="member_type" value="active" checked required>
-                                Einsatzeinheit
-                            </label>
-                            <label>
-                                <input type="radio" name="member_type" value="supporter">
-                                Förderer
-                            </label>
-                        </div>
+                        <select name="member_type" id="member_type" required>
+                            <option value="active">Einsatzeinheit</option>
+                            <option value="supporter">Förderer</option>
+                            <option value="pensioner">Altersabteilung</option>
+                        </select>
                     </div>
                     
                     <div class="form-group">
@@ -507,7 +556,7 @@ function editMember(member) {
     document.getElementById('memberId').value = member.id;
     
     // Fill form fields
-    document.querySelector('[name="member_type"][value="' + member.member_type + '"]').checked = true;
+    document.querySelector('[name="member_type"]').value = member.member_type;
     document.querySelector('[name="salutation"]').value = member.salutation || '';
     document.querySelector('[name="first_name"]').value = member.first_name;
     document.querySelector('[name="last_name"]').value = member.last_name;

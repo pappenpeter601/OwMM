@@ -18,7 +18,7 @@
                         <li><a href="index.php">Start</a></li>
                         <li><a href="operations.php">Einsätze</a></li>
                         <li><a href="events.php">Veranstaltungen</a></li>
-                        <li><a href="board.php">Vorstandschaft</a></li>
+                        <li><a href="board.php">Kommando</a></li>
                         <li><a href="contact.php">Kontakt</a></li>
                     </ul>
                 </div>

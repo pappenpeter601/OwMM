@@ -12,59 +12,101 @@ $db = getDBConnection();
 
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $section_key = $_POST['section_key'];
-    $title = sanitize_input($_POST['title']);
-    $content = $_POST['content'];
-    
-    // Handle image upload
-    $image_url = null;
-    if (isset($_FILES['image']) && $_FILES['image']['size'] > 0) {
-        $result = upload_image($_FILES['image'], 'content');
-        if ($result['success']) {
-            $image_url = $result['url'];
-            
-            // Delete old image if exists
-            $stmt = $db->prepare("SELECT image_url FROM page_content WHERE section_key = :key");
-            $stmt->execute(['key' => $section_key]);
-            $old = $stmt->fetch();
-            if ($old && $old['image_url']) {
-                delete_image($old['image_url']);
+    try {
+        $section_key = $_POST['section_key'] ?? '';
+        $title = sanitize_input($_POST['title'] ?? '');
+        $content = $_POST['content'] ?? '';
+        
+        if (empty($section_key)) {
+            throw new Exception('Section key is required');
+        }
+        
+        // Handle image upload
+        $image_url = null;
+        if (isset($_FILES['image']) && $_FILES['image']['size'] > 0) {
+            $result = upload_image($_FILES['image'], 'content');
+            if ($result['success']) {
+                $image_url = $result['url'];
+                
+                // Delete old image if exists
+                $stmt = $db->prepare("SELECT image_url FROM page_content WHERE section_key = :key");
+                $stmt->execute(['key' => $section_key]);
+                $old = $stmt->fetch();
+                if ($old && $old['image_url']) {
+                    delete_image($old['image_url']);
+                }
+            } else {
+                throw new Exception('Image upload failed: ' . ($result['error'] ?? 'Unknown error'));
             }
         }
+        
+        // Check if content exists
+        $stmt = $db->prepare("SELECT id FROM page_content WHERE section_key = :key");
+        $stmt->execute(['key' => $section_key]);
+        $exists = $stmt->fetch();
+        
+        if ($exists) {
+            // Update existing content
+            if ($image_url) {
+                $stmt = $db->prepare("UPDATE page_content SET title = :title, content = :content, image_url = :image, updated_by = :user_id WHERE section_key = :key");
+                $stmt->execute([
+                    'key' => $section_key,
+                    'title' => $title,
+                    'content' => $content,
+                    'image' => $image_url,
+                    'user_id' => $_SESSION['user_id']
+                ]);
+            } else {
+                $stmt = $db->prepare("UPDATE page_content SET title = :title, content = :content, updated_by = :user_id WHERE section_key = :key");
+                $stmt->execute([
+                    'key' => $section_key,
+                    'title' => $title,
+                    'content' => $content,
+                    'user_id' => $_SESSION['user_id']
+                ]);
+            }
+        } else {
+            // Insert new content
+            if ($image_url) {
+                $stmt = $db->prepare("INSERT INTO page_content (section_key, title, content, image_url, updated_by) VALUES (:key, :title, :content, :image, :user_id)");
+                $stmt->execute([
+                    'key' => $section_key,
+                    'title' => $title,
+                    'content' => $content,
+                    'image' => $image_url,
+                    'user_id' => $_SESSION['user_id']
+                ]);
+            } else {
+                $stmt = $db->prepare("INSERT INTO page_content (section_key, title, content, updated_by) VALUES (:key, :title, :content, :user_id)");
+                $stmt->execute([
+                    'key' => $section_key,
+                    'title' => $title,
+                    'content' => $content,
+                    'user_id' => $_SESSION['user_id']
+                ]);
+            }
+        }
+        
+        $success = "Inhalt erfolgreich aktualisiert";
+        
+        // Redirect to prevent form resubmission
+        header('Location: content.php?success=1');
+        exit;
+        
+    } catch (Exception $e) {
+        $error = "Fehler beim Speichern: " . $e->getMessage();
+        error_log("Content save error: " . $e->getMessage());
     }
-    
-    // Update or insert
-    if ($image_url) {
-        $stmt = $db->prepare("INSERT INTO page_content (section_key, title, content, image_url, updated_by) 
-                              VALUES (:key, :title, :content, :image, :user_id)
-                              ON DUPLICATE KEY UPDATE 
-                              title = :title, content = :content, image_url = :image, updated_by = :user_id");
-        $stmt->execute([
-            'key' => $section_key,
-            'title' => $title,
-            'content' => $content,
-            'image' => $image_url,
-            'user_id' => $_SESSION['user_id']
-        ]);
-    } else {
-        $stmt = $db->prepare("INSERT INTO page_content (section_key, title, content, updated_by) 
-                              VALUES (:key, :title, :content, :user_id)
-                              ON DUPLICATE KEY UPDATE 
-                              title = :title, content = :content, updated_by = :user_id");
-        $stmt->execute([
-            'key' => $section_key,
-            'title' => $title,
-            'content' => $content,
-            'user_id' => $_SESSION['user_id']
-        ]);
-    }
-    
-    $success = "Inhalt erfolgreich aktualisiert";
 }
 
 // Get all page content
 $stmt = $db->query("SELECT * FROM page_content ORDER BY section_key");
 $contents = $stmt->fetchAll();
+
+// Check for success message from redirect
+if (isset($_GET['success'])) {
+    $success = "Inhalt erfolgreich aktualisiert";
+}
 
 $page_title = 'Seiteninhalte bearbeiten';
 include 'includes/header.php';
@@ -72,6 +114,10 @@ include 'includes/header.php';
 
 <?php if (isset($success)): ?>
     <div class="alert alert-success"><?php echo $success; ?></div>
+<?php endif; ?>
+
+<?php if (isset($error)): ?>
+    <div class="alert alert-error"><?php echo $error; ?></div>
 <?php endif; ?>
 
 <div class="page-header">

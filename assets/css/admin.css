@@ -239,13 +239,16 @@ body {
 .data-table {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
 }
 
 .data-table th,
 .data-table td {
-    padding: 1rem;
+    padding: 0.75rem;
     text-align: left;
     border-bottom: 1px solid var(--border-color);
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 .data-table th {
@@ -256,6 +259,126 @@ body {
 
 .data-table tbody tr:hover {
     background-color: rgba(0,0,0,0.02);
+}
+
+/* Items Table Specific */
+.items-table {
+    font-size: 0.95rem;
+}
+
+.items-table td:nth-child(1) {
+    word-break: break-word;
+}
+
+.items-table td:nth-child(2) {
+    text-align: right;
+    font-weight: 500;
+}
+
+.items-table td:nth-child(3) {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.items-table .action-buttons {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+}
+
+/* Transaction Table Specific */
+.transactions-table {
+    font-size: 0.95rem;
+}
+
+.transactions-table td.date {
+    width: 70px;
+    white-space: nowrap;
+}
+
+.transactions-table td.purpose {
+    width: 150px;
+    word-break: break-word;
+    white-space: normal;
+}
+
+.transactions-table td.payer {
+    width: 100px;
+    word-break: break-word;
+    white-space: normal;
+}
+
+.transactions-table td.amount {
+    width: 80px;
+    white-space: nowrap;
+    text-align: right;
+}
+
+.transactions-table td.category {
+    width: 110px;
+    padding: 0.5rem !important;
+}
+
+.transactions-table td.business-year {
+    width: 70px;
+    padding: 0.5rem !important;
+}
+
+.transactions-table td.documents {
+    width: 90px;
+    padding: 0.5rem !important;
+}
+
+.transactions-table td.obligations {
+    width: 100px;
+    padding: 0.5rem !important;
+}
+
+.transactions-table td.notes {
+    width: 150px;
+    padding: 0.5rem !important;
+}
+
+.transactions-table td.actions {
+    width: 60px;
+    padding: 0.5rem !important;
+}
+
+/* Inline forms in table cells */
+.inline-form {
+    margin: 0;
+}
+
+.inline-form select,
+.inline-form input[type="number"],
+.inline-form textarea {
+    width: 100%;
+    padding: 0.4rem;
+    margin: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    font-size: 0.9rem;
+    font-family: inherit;
+}
+
+.inline-form select:focus,
+.inline-form input[type="number"]:focus,
+.inline-form textarea:focus {
+    outline: none;
+    border-color: var(--secondary-color);
+    box-shadow: 0 0 4px rgba(25, 118, 210, 0.2);
+}
+
+.category-select {
+    min-width: unset !important;
+}
+
+.note-input {
+    min-height: unset !important;
+    min-width: unset !important;
+    height: 60px;
+    resize: none;
 }
 
 .actions {

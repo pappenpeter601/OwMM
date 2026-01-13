@@ -111,9 +111,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
     } elseif ($_POST['action'] === 'cancel_obligation') {
         $obligation_id = $_POST['obligation_id'];
-        $stmt = $db->prepare("UPDATE member_fee_obligations SET status = 'cancelled' WHERE id = :id AND member_id = :member_id");
-        $stmt->execute(['id' => $obligation_id, 'member_id' => $member_id]);
-        $message = 'Forderung storniert.';
+        $cancellation_reason = $_POST['cancellation_reason'] ?? '';
+        
+        // Update the obligation with cancellation status and reason
+        $stmt = $db->prepare("UPDATE member_fee_obligations 
+                            SET status = 'cancelled', 
+                                notes = CONCAT(COALESCE(notes, ''), 
+                                             IF(COALESCE(notes, '') = '', '', '\n---\n'),
+                                             'Storniert am ', DATE_FORMAT(NOW(), '%d.%m.%Y %H:%i'), ' durch ', :user_name, '\n', 'Grund: ', :reason)
+                            WHERE id = :id AND member_id = :member_id");
+        $stmt->execute([
+            'id' => $obligation_id,
+            'member_id' => $member_id,
+            'user_name' => $_SESSION['user_name'] ?? $_SESSION['username'],
+            'reason' => $cancellation_reason
+        ]);
+        $message = 'Forderung erfolgreich storniert.';
         $member = get_member($member_id); // Refresh
     }
 }
@@ -364,6 +377,35 @@ include 'includes/header.php';
     </div>
 </div>
 
+<!-- Cancel Obligation Modal -->
+<div id="cancelObligationModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Forderung stornieren</h2>
+            <span class="close" onclick="closeCancelModal()">&times;</span>
+        </div>
+        <form method="POST" id="cancelObligationForm">
+            <input type="hidden" name="action" value="cancel_obligation">
+            <input type="hidden" name="obligation_id" id="cancelObligationId">
+            
+            <div class="alert alert-warning">
+                <i class="fas fa-exclamation-triangle"></i> <strong>Warnung:</strong> Diese Aktion kann nicht rückgängig gemacht werden. Die Forderung wird als storniert markiert.
+            </div>
+            
+            <div class="form-group">
+                <label>Stornierungsgrund: *</label>
+                <textarea name="cancellation_reason" id="cancellationReason" rows="4" placeholder="Bitte geben Sie den Grund für die Stornierung ein..." required></textarea>
+                <small style="color: #666;">Ein Grund ist erforderlich für Audit- und Nachverfolgungszwecke.</small>
+            </div>
+            
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeCancelModal()">Abbrechen</button>
+                <button type="submit" class="btn btn-danger">Forderung stornieren</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <style>
 .info-grid {
     display: grid;
@@ -511,16 +553,25 @@ function deletePayment(id) {
 }
 
 function cancelObligation(id) {
-    if (confirm('Möchten Sie diese Forderung wirklich stornieren? Sie kann nicht wiederhergestellt werden.')) {
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.innerHTML = `
-            <input type="hidden" name="action" value="cancel_obligation">
-            <input type="hidden" name="obligation_id" value="${id}">
-        `;
-        document.body.appendChild(form);
-        form.submit();
-    }
+    document.getElementById('cancelObligationId').value = id;
+    document.getElementById('cancellationReason').value = '';
+    document.getElementById('cancelObligationModal').style.display = 'flex';
+}
+
+function closeCancelModal() {
+    document.getElementById('cancelObligationModal').style.display = 'none';
+}
+
+function closePaymentModal() {
+    document.getElementById('addPaymentModal').style.display = 'none';
+}
+
+function closeDetailsModal() {
+    document.getElementById('obligationDetailsModal').style.display = 'none';
+}
+
+function closeGenerateModal() {
+    document.getElementById('generateObligationModal').style.display = 'none';
 }
 
 // Close modals when clicking outside

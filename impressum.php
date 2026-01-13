@@ -19,34 +19,30 @@ include 'includes/header.php';
         <div class="legal-content">
             <h2>Angaben gemäß § 5 TMG</h2>
             <p>
-                <strong><?php echo SITE_NAME; ?></strong><br>
-                [Ihre Straße und Hausnummer]<br>
-                [PLZ] [Ort]<br>
+                <strong>Freiwillige Feuerwehr Meinern-Mittelstendorf</strong><br>
+                Nottorfweg 3A<br>
+                29614 Soltau<br>
             </p>
             
             <h3>Vertreten durch:</h3>
             <p>
-                [Name des Vorsitzenden]<br>
-                [Funktion]
+                Marc Grünhagen<br>
+                Ortsbrandmeister
             </p>
             
             <h3>Kontakt:</h3>
             <p>
-                Telefon: [Ihre Telefonnummer]<br>
-                E-Mail: <?php echo ADMIN_EMAIL; ?>
-            </p>
-            
-            <h3>Vereinsregister:</h3>
-            <p>
-                Eintragung im Vereinsregister<br>
-                Registergericht: [Amtsgericht]<br>
-                Registernummer: [VR-Nummer]
+                Telefon: 0174 9778157<br>
+                E-Mail: kommando@owmm.de
             </p>
             
             <h3>Verantwortlich für den Inhalt nach § 55 Abs. 2 RStV:</h3>
             <p>
-                [Name des Verantwortlichen]<br>
-                [Adresse]
+                Peter Scharringhausen<br>
+                Wüsthof 1<br>
+                29614 Soltau<br>
+                Telefon: 01520 89 879 31<br>
+                E-Mail: kommando@owmm.de
             </p>
             
             <h2>Haftungsausschluss</h2>

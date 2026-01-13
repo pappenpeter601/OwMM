@@ -3,6 +3,11 @@ require_once '../config/config.php';
 require_once '../config/database.php';
 require_once '../includes/functions.php';
 
+// Start session if not already started
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
 // Check if user is admin or kassenpruefer
 if (!is_logged_in() || !can_edit_cash()) {
     header('Location: login.php');
@@ -10,22 +15,59 @@ if (!is_logged_in() || !can_edit_cash()) {
 }
 
 $year = $_GET['year'] ?? date('Y');
+$tab = $_GET['tab'] ?? 'fees'; // 'fees' or 'items'
 $db = getDBConnection();
+$error = '';
 
-// Get open obligations for the year
+// Get fee obligations for the year
 $open_obligations = get_open_obligations($year);
 
-// Get ALL obligations for the year (including paid) for accurate totals
+// Get ALL fee obligations for the year (including paid) for accurate totals
 $stmt = $db->prepare("SELECT fee_amount, paid_amount, (fee_amount - paid_amount) as outstanding
                       FROM member_fee_obligations
                       WHERE fee_year = :year");
-$stmt->execute([':year' => $year]);
+$stmt->execute(['year' => $year]);
 $all_obligations = $stmt->fetchAll();
 
-// Calculate totals from ALL obligations (including paid ones)
+// Calculate totals from ALL fee obligations (including paid ones)
 $total_expected = array_sum(array_column($all_obligations, 'fee_amount'));
 $total_paid = array_sum(array_column($all_obligations, 'paid_amount'));
 $total_outstanding = array_sum(array_column($all_obligations, 'outstanding'));
+
+// Get item obligations (open only)
+$open_item_obligations = [];
+$all_item_obligations = [];
+$item_total_amount = 0;
+$item_total_paid = 0;
+$item_total_outstanding = 0;
+
+try {
+    $stmt = $db->prepare("SELECT io.*, 
+                                  COALESCE(m.first_name, '') as member_first_name,
+                                  COALESCE(m.last_name, '') as member_last_name,
+                                  COALESCE(m.member_number, '') as member_number,
+                                  COALESCE(om.first_name, '') as org_first_name,
+                                  COALESCE(om.last_name, '') as org_last_name
+                          FROM item_obligations io
+                          LEFT JOIN members m ON io.member_id = m.id
+                          LEFT JOIN members om ON io.organizing_member_id = om.id
+                          WHERE io.status = 'open'
+                          ORDER BY ISNULL(io.due_date) ASC, io.due_date ASC, io.created_at DESC");
+    $stmt->execute();
+    $open_item_obligations = $stmt->fetchAll();
+
+    // Calculate totals from ALL item obligations (including paid) 
+    $stmt = $db->prepare("SELECT total_amount, paid_amount, (total_amount - paid_amount) as outstanding
+                          FROM item_obligations");
+    $stmt->execute();
+    $all_item_obligations = $stmt->fetchAll();
+    
+    $item_total_amount = array_sum(array_column($all_item_obligations, 'total_amount'));
+    $item_total_paid = array_sum(array_column($all_item_obligations, 'paid_amount'));
+    $item_total_outstanding = array_sum(array_column($all_item_obligations, 'outstanding'));
+} catch (PDOException $e) {
+    error_log("Item obligations query error: " . $e->getMessage());
+}
 
 include 'includes/header.php';
 ?>
@@ -36,55 +78,100 @@ include 'includes/header.php';
             <i class="fas fa-arrow-left"></i> Zurück
         </a>
         <h1 style="display: inline-block; margin-left: 1rem;">
-            Offene Forderungen <?= $year ?>
+            Offene Forderungen
         </h1>
+        <a href="create_item_obligation.php" class="btn btn-primary" style="float: right;">
+            <i class="fas fa-plus"></i> Artikel-Forderung hinzufügen
+        </a>
     </div>
 </div>
 
 <!-- Summary Cards -->
 <div class="stats-grid">
-    <div class="stat-card">
-        <div class="stat-icon" style="background: #f44336;">
-            <i class="fas fa-exclamation-triangle"></i>
+    <?php if ($tab === 'fees'): ?>
+        <div class="stat-card">
+            <div class="stat-icon" style="background: #f44336;">
+                <i class="fas fa-exclamation-triangle"></i>
+            </div>
+            <div class="stat-info">
+                <div class="stat-value"><?= count($open_obligations) ?></div>
+                <div class="stat-label">Offene Positionen</div>
+            </div>
         </div>
-        <div class="stat-info">
-            <div class="stat-value"><?= count($open_obligations) ?></div>
-            <div class="stat-label">Offene Positionen</div>
+        
+        <div class="stat-card">
+            <div class="stat-icon" style="background: #ff9800;">
+                <i class="fas fa-euro-sign"></i>
+            </div>
+            <div class="stat-info">
+                <div class="stat-value"><?= number_format($total_outstanding, 2, ',', '.') ?> €</div>
+                <div class="stat-label">Ausstehender Betrag</div>
+            </div>
         </div>
-    </div>
-    
-    <div class="stat-card">
-        <div class="stat-icon" style="background: #ff9800;">
-            <i class="fas fa-euro-sign"></i>
+        
+        <div class="stat-card">
+            <div class="stat-icon" style="background: #9e9e9e;">
+                <i class="fas fa-file-invoice-dollar"></i>
+            </div>
+            <div class="stat-info">
+                <div class="stat-value"><?= number_format($total_expected, 2, ',', '.') ?> €</div>
+                <div class="stat-label">Sollbetrag gesamt</div>
+            </div>
         </div>
-        <div class="stat-info">
-            <div class="stat-value"><?= number_format($total_outstanding, 2, ',', '.') ?> €</div>
-            <div class="stat-label">Ausstehender Betrag</div>
+        
+        <div class="stat-card">
+            <div class="stat-icon" style="background: #4caf50;">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            <div class="stat-info">
+                <div class="stat-value"><?= number_format($total_paid, 2, ',', '.') ?> €</div>
+                <div class="stat-label">Bereits eingegangen</div>
+            </div>
         </div>
-    </div>
-    
-    <div class="stat-card">
-        <div class="stat-icon" style="background: #9e9e9e;">
-            <i class="fas fa-file-invoice-dollar"></i>
+    <?php else: ?>
+        <div class="stat-card">
+            <div class="stat-icon" style="background: #f44336;">
+                <i class="fas fa-exclamation-triangle"></i>
+            </div>
+            <div class="stat-info">
+                <div class="stat-value"><?= count($open_item_obligations) ?></div>
+                <div class="stat-label">Offene Forderungen</div>
+            </div>
         </div>
-        <div class="stat-info">
-            <div class="stat-value"><?= number_format($total_expected, 2, ',', '.') ?> €</div>
-            <div class="stat-label">Sollbetrag gesamt</div>
+        
+        <div class="stat-card">
+            <div class="stat-icon" style="background: #ff9800;">
+                <i class="fas fa-euro-sign"></i>
+            </div>
+            <div class="stat-info">
+                <div class="stat-value"><?= number_format($item_total_outstanding, 2, ',', '.') ?> €</div>
+                <div class="stat-label">Ausstehender Betrag</div>
+            </div>
         </div>
-    </div>
-    
-    <div class="stat-card">
-        <div class="stat-icon" style="background: #4caf50;">
-            <i class="fas fa-check-circle"></i>
+        
+        <div class="stat-card">
+            <div class="stat-icon" style="background: #9e9e9e;">
+                <i class="fas fa-boxes"></i>
+            </div>
+            <div class="stat-info">
+                <div class="stat-value"><?= number_format($item_total_amount, 2, ',', '.') ?> €</div>
+                <div class="stat-label">Gesamtbetrag</div>
+            </div>
         </div>
-        <div class="stat-info">
-            <div class="stat-value"><?= number_format($total_paid, 2, ',', '.') ?> €</div>
-            <div class="stat-label">Bereits eingegangen</div>
+        
+        <div class="stat-card">
+            <div class="stat-icon" style="background: #4caf50;">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            <div class="stat-info">
+                <div class="stat-value"><?= number_format($item_total_paid, 2, ',', '.') ?> €</div>
+                <div class="stat-label">Bereits eingegangen</div>
+            </div>
         </div>
-    </div>
+    <?php endif; ?>
 </div>
 
-<!-- Year Filter -->
+<!-- Year Filter and Tabs -->
 <div class="filters-bar">
     <form method="GET" class="filters-form">
         <div class="filter-group">
@@ -96,103 +183,238 @@ include 'includes/header.php';
             </select>
         </div>
     </form>
+    
+    <!-- Tab Navigation -->
+    <div class="tabs">
+        <a href="?year=<?= $year ?>&tab=fees" class="tab-button <?= $tab === 'fees' ? 'active' : '' ?>">
+            <i class="fas fa-file-invoice-dollar"></i> Mitgliedsbeiträge
+        </a>
+        <a href="?year=<?= $year ?>&tab=items" class="tab-button <?= $tab === 'items' ? 'active' : '' ?>">
+            <i class="fas fa-boxes"></i> Artikel-Forderungen
+        </a>
+    </div>
 </div>
 
 <!-- Outstanding Obligations Table -->
 <div class="card">
     <div class="card-header">
-        <h2>Offene Forderungen</h2>
+        <h2><?= $tab === 'fees' ? 'Offene Mitgliedsbeiträge' : 'Offene Artikel-Forderungen' ?></h2>
     </div>
     <div class="card-body">
-        <?php if (empty($open_obligations)): ?>
-            <div class="info-box success">
-                <p><i class="fas fa-check-circle"></i> <strong>Alle Beiträge für <?= $year ?> wurden bezahlt!</strong></p>
-                <p>Es gibt keine offenen Forderungen für dieses Jahr.</p>
-            </div>
-        <?php else: ?>
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>Mitgliedsnr.</th>
-                        <th>Name</th>
-                        <th>Typ</th>
-                        <th>Sollbetrag</th>
-                        <th>Gezahlt</th>
-                        <th>Offen</th>
-                        <th>Status</th>
-                        <th>Fälligkeitsdatum</th>
-                        <th>Aktionen</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($open_obligations as $obl): ?>
-                        <?php 
-                        $is_overdue = $obl['due_date'] && strtotime($obl['due_date']) < time();
-                        ?>
-                        <tr class="<?= $is_overdue ? 'overdue-row' : '' ?>">
-                            <td><?= htmlspecialchars($obl['member_number'] ?? '-') ?></td>
-                            <td>
-                                <strong><?= htmlspecialchars($obl['first_name'] . ' ' . $obl['last_name']) ?></strong>
-                            </td>
-                            <td>
-                                <?php if ($obl['member_type'] === 'active'): ?>
-                                    <span class="badge badge-primary">Einsatzeinheit</span>
-                                <?php else: ?>
-                                    <span class="badge badge-info">Förderer</span>
-                                <?php endif; ?>
-                            </td>
-                            <td><?= number_format($obl['fee_amount'], 2, ',', '.') ?> €</td>
-                            <td><?= number_format($obl['paid_amount'], 2, ',', '.') ?> €</td>
-                            <td class="text-danger">
-                                <strong><?= number_format($obl['outstanding'], 2, ',', '.') ?> €</strong>
-                            </td>
-                            <td>
-                                <?php if ($obl['status'] === 'partial'): ?>
-                                    <span class="badge badge-warning">
-                                        <i class="fas fa-clock"></i> Teilzahlung
-                                    </span>
-                                <?php else: ?>
-                                    <span class="badge badge-danger">
-                                        <i class="fas fa-exclamation-triangle"></i> Offen
-                                    </span>
-                                <?php endif; ?>
-                            </td>
-                            <td>
-                                <?= $obl['due_date'] ? date('d.m.Y', strtotime($obl['due_date'])) : '-' ?>
-                                <?php if ($is_overdue): ?>
-                                    <br><span class="overdue-badge">
-                                        <i class="fas fa-exclamation-circle"></i> Überfällig
-                                    </span>
-                                <?php endif; ?>
-                            </td>
-                            <td class="action-buttons">
-                                <a href="member_payments.php?id=<?= $obl['member_id'] ?>" 
-                                   class="btn btn-sm btn-info" title="Zahlungen">
-                                    <i class="fas fa-euro-sign"></i>
-                                </a>
-                                <a href="members.php#member-<?= $obl['member_id'] ?>" 
-                                   class="btn btn-sm btn-secondary" title="Mitglied anzeigen">
-                                    <i class="fas fa-user"></i>
-                                </a>
-                            </td>
+        <?php if ($tab === 'fees'): ?>
+            <!-- Fee Obligations Tab -->
+            <?php if (empty($open_obligations)): ?>
+                <div class="info-box success">
+                    <p><i class="fas fa-check-circle"></i> <strong>Alle Beiträge für <?= $year ?> wurden bezahlt!</strong></p>
+                    <p>Es gibt keine offenen Forderungen für dieses Jahr.</p>
+                </div>
+            <?php else: ?>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Mitgliedsnr.</th>
+                            <th>Name</th>
+                            <th>Typ</th>
+                            <th>Sollbetrag</th>
+                            <th>Gezahlt</th>
+                            <th>Offen</th>
+                            <th>Status</th>
+                            <th>Fälligkeitsdatum</th>
+                            <th>Aktionen</th>
                         </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-            
-            <div class="card-footer">
-                <button class="btn btn-primary" onclick="window.print()">
-                    <i class="fas fa-print"></i> Mahnliste drucken
-                </button>
-                <button class="btn btn-secondary" onclick="exportCSV()">
-                    <i class="fas fa-download"></i> Als CSV exportieren
-                </button>
-            </div>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($open_obligations as $obl): ?>
+                            <?php 
+                            $is_overdue = $obl['due_date'] && strtotime($obl['due_date']) < time();
+                            ?>
+                            <tr class="<?= $is_overdue ? 'overdue-row' : '' ?>">
+                                <td><?= htmlspecialchars($obl['member_number'] ?? '-') ?></td>
+                                <td>
+                                    <strong><?= htmlspecialchars($obl['first_name'] . ' ' . $obl['last_name']) ?></strong>
+                                </td>
+                                <td>
+                                    <?php if ($obl['member_type'] === 'active'): ?>
+                                        <span class="badge badge-primary">Einsatzeinheit</span>
+                                    <?php else: ?>
+                                        <span class="badge badge-info">Förderer</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td><?= number_format($obl['fee_amount'], 2, ',', '.') ?> €</td>
+                                <td><?= number_format($obl['paid_amount'], 2, ',', '.') ?> €</td>
+                                <td class="text-danger">
+                                    <strong><?= number_format($obl['outstanding'], 2, ',', '.') ?> €</strong>
+                                </td>
+                                <td>
+                                    <?php if ($obl['status'] === 'partial'): ?>
+                                        <span class="badge badge-warning">
+                                            <i class="fas fa-clock"></i> Teilzahlung
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="badge badge-danger">
+                                            <i class="fas fa-exclamation-triangle"></i> Offen
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?= $obl['due_date'] ? date('d.m.Y', strtotime($obl['due_date'])) : '-' ?>
+                                    <?php if ($is_overdue): ?>
+                                        <br><span class="overdue-badge">
+                                            <i class="fas fa-exclamation-circle"></i> Überfällig
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="action-buttons">
+                                    <a href="member_payments.php?id=<?= $obl['member_id'] ?>" 
+                                       class="btn btn-sm btn-info" title="Zahlungen">
+                                        <i class="fas fa-euro-sign"></i>
+                                    </a>
+                                    <a href="members.php#member-<?= $obl['member_id'] ?>" 
+                                       class="btn btn-sm btn-secondary" title="Mitglied anzeigen">
+                                        <i class="fas fa-user"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                
+                <div class="card-footer">
+                    <button class="btn btn-primary" onclick="window.print()">
+                        <i class="fas fa-print"></i> Mahnliste drucken
+                    </button>
+                    <button class="btn btn-secondary" onclick="exportCSV()">
+                        <i class="fas fa-download"></i> Als CSV exportieren
+                    </button>
+                </div>
+            <?php endif; ?>
+        
+        <?php else: ?>
+            <!-- Item Obligations Tab -->
+            <?php if (empty($open_item_obligations)): ?>
+                <div class="info-box success">
+                    <p><i class="fas fa-check-circle"></i> <strong>Keine offenen Artikel-Forderungen!</strong></p>
+                    <p>Alle Artikel-Forderungen wurden bezahlt.</p>
+                </div>
+            <?php else: ?>
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Empfänger</th>
+                            <th>Typ</th>
+                            <th>Organisierendes Mitglied</th>
+                            <th>Gesamtbetrag</th>
+                            <th>Gezahlt</th>
+                            <th>Offen</th>
+                            <th>Status</th>
+                            <th>Fälligkeitsdatum</th>
+                            <th>Aktionen</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($open_item_obligations as $obl): ?>
+                            <?php 
+                            $is_overdue = $obl['due_date'] && strtotime($obl['due_date']) < time();
+                            $outstanding = $obl['total_amount'] - $obl['paid_amount'];
+                            $is_member = !empty($obl['member_id']);
+                            $receiver_display = $is_member 
+                                ? htmlspecialchars($obl['member_first_name'] . ' ' . $obl['member_last_name'])
+                                : htmlspecialchars($obl['receiver_name']);
+                            ?>
+                            <tr class="<?= $is_overdue ? 'overdue-row' : '' ?>">
+                                <td>
+                                    <strong><?= $receiver_display ?></strong>
+                                    <?php if (!$is_member && $obl['receiver_phone']): ?>
+                                        <br><small style="color: #666;"><?= htmlspecialchars($obl['receiver_phone']) ?></small>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?php if ($is_member): ?>
+                                        <span class="badge badge-primary">Mitglied</span>
+                                    <?php else: ?>
+                                        <span class="badge badge-secondary">Extern</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?php if ($obl['organizing_member_id']): ?>
+                                        <small><?= htmlspecialchars($obl['org_first_name'] . ' ' . $obl['org_last_name']) ?></small>
+                                    <?php else: ?>
+                                        <small style="color: #999;">-</small>
+                                    <?php endif; ?>
+                                </td>
+                                <td><?= number_format($obl['total_amount'], 2, ',', '.') ?> €</td>
+                                <td><?= number_format($obl['paid_amount'], 2, ',', '.') ?> €</td>
+                                <td class="text-danger">
+                                    <strong><?= number_format($outstanding, 2, ',', '.') ?> €</strong>
+                                </td>
+                                <td>
+                                    <?php if ($outstanding == 0): ?>
+                                        <span class="badge badge-success">Bezahlt</span>
+                                    <?php elseif ($obl['paid_amount'] > 0): ?>
+                                        <span class="badge badge-warning">Teilzahlung</span>
+                                    <?php else: ?>
+                                        <span class="badge badge-danger">Offen</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?= $obl['due_date'] ? date('d.m.Y', strtotime($obl['due_date'])) : '-' ?>
+                                    <?php if ($is_overdue): ?>
+                                        <br><span class="overdue-badge">
+                                            <i class="fas fa-exclamation-circle"></i> Überfällig
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="action-buttons">
+                                    <a href="view_item_obligation.php?id=<?= $obl['id'] ?>" 
+                                       class="btn btn-sm btn-secondary" title="Details anzeigen">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                
+                <div class="card-footer">
+                    <button class="btn btn-primary" onclick="window.print()">
+                        <i class="fas fa-print"></i> Liste drucken
+                    </button>
+                </div>
+            <?php endif; ?>
         <?php endif; ?>
     </div>
 </div>
 
 <style>
+.tabs {
+    display: flex;
+    gap: 0.5rem;
+    margin-left: auto;
+}
+
+.tab-button {
+    padding: 0.5rem 1rem;
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    border-radius: 4px 4px 0 0;
+    text-decoration: none;
+    color: #333;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.tab-button:hover {
+    background: #e0e0e0;
+}
+
+.tab-button.active {
+    background: white;
+    border-bottom-color: white;
+    color: #1976d2;
+    font-weight: bold;
+    border-bottom: 2px solid #1976d2;
+}
+
 .overdue-row {
     background-color: #ffebee;
     font-weight: 600;
@@ -225,7 +447,7 @@ include 'includes/header.php';
 }
 
 @media print {
-    .content-header, .filters-bar, .card-footer, .action-buttons, .btn {
+    .content-header, .filters-bar, .card-footer, .action-buttons, .btn, .tabs {
         display: none !important;
     }
     
@@ -266,7 +488,7 @@ function exportCSV() {
     const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = 'offene_forderungen_<?= $year ?>.csv';
+    link.download = 'forderungen.csv';
     link.click();
 }
 </script>

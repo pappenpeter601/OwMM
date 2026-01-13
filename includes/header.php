@@ -27,7 +27,7 @@
                     <li><a href="index.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'index.php' ? 'active' : ''; ?>">Start</a></li>
                     <li><a href="operations.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'operations.php' ? 'active' : ''; ?>">Einsätze</a></li>
                     <li><a href="events.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'events.php' ? 'active' : ''; ?>">Veranstaltungen</a></li>
-                    <li><a href="board.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'board.php' ? 'active' : ''; ?>">Vorstandschaft</a></li>
+                    <li><a href="board.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'board.php' ? 'active' : ''; ?>">Kommando</a></li>
                     <li><a href="contact.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'contact.php' ? 'active' : ''; ?>">Kontakt</a></li>
                     <li><a href="impressum.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'impressum.php' ? 'active' : ''; ?>">Impressum</a></li>
                     <li><a href="admin/login.php" class="admin-link" title="Admin-Bereich"><i class="fas fa-user-shield"></i></a></li>

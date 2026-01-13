@@ -37,6 +37,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'published' => $published,
                 'user_id' => $_SESSION['user_id']
             ]);
+            $event_id = $db->lastInsertId();
+            
+            // Handle image uploads
+            if (isset($_FILES['images']) && !empty($_FILES['images']['name'][0])) {
+                foreach ($_FILES['images']['name'] as $key => $name) {
+                    if ($_FILES['images']['error'][$key] === UPLOAD_ERR_OK) {
+                        $file = [
+                            'name' => $_FILES['images']['name'][$key],
+                            'type' => $_FILES['images']['type'][$key],
+                            'tmp_name' => $_FILES['images']['tmp_name'][$key],
+                            'error' => $_FILES['images']['error'][$key],
+                            'size' => $_FILES['images']['size'][$key]
+                        ];
+                        $result = upload_image($file, 'events');
+                        if ($result['success']) {
+                            $stmt = $db->prepare("INSERT INTO event_images (event_id, image_url, sort_order) VALUES (:event_id, :image_url, :sort_order)");
+                            $stmt->execute([
+                                'event_id' => $event_id,
+                                'image_url' => $result['url'],
+                                'sort_order' => $key
+                            ]);
+                        }
+                    }
+                }
+            }
+            
             $success = "Veranstaltung erfolgreich hinzugefügt";
         } else {
             $stmt = $db->prepare("UPDATE events SET title = :title, description = :description, 
@@ -53,6 +79,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'published' => $published,
                 'id' => $id
             ]);
+            
+            // Handle image uploads for edit
+            if (isset($_FILES['images']) && !empty($_FILES['images']['name'][0])) {
+                foreach ($_FILES['images']['name'] as $key => $name) {
+                    if ($_FILES['images']['error'][$key] === UPLOAD_ERR_OK) {
+                        $file = [
+                            'name' => $_FILES['images']['name'][$key],
+                            'type' => $_FILES['images']['type'][$key],
+                            'tmp_name' => $_FILES['images']['tmp_name'][$key],
+                            'error' => $_FILES['images']['error'][$key],
+                            'size' => $_FILES['images']['size'][$key]
+                        ];
+                        $result = upload_image($file, 'events');
+                        if ($result['success']) {
+                            // Get current max sort order
+                            $stmt = $db->prepare("SELECT COALESCE(MAX(sort_order), -1) + 1 as next_order FROM event_images WHERE event_id = :event_id");
+                            $stmt->execute(['event_id' => $id]);
+                            $next_order = $stmt->fetch()['next_order'];
+                            
+                            $stmt = $db->prepare("INSERT INTO event_images (event_id, image_url, sort_order) VALUES (:event_id, :image_url, :sort_order)");
+                            $stmt->execute([
+                                'event_id' => $id,
+                                'image_url' => $result['url'],
+                                'sort_order' => $next_order
+                            ]);
+                        }
+                    }
+                }
+            }
+            
             $success = "Veranstaltung erfolgreich aktualisiert";
         }
     } elseif ($action === 'delete') {
@@ -71,7 +127,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Get all events
-$events = get_events(null, null, false);
+$upcoming_events = array_filter($events = get_events(null, null, false), function($e) { return $e['status'] === 'upcoming'; });
+$past_events = array_filter($events, function($e) { return $e['status'] === 'past'; });
 
 $page_title = 'Veranstaltungen verwalten';
 include 'includes/header.php';
@@ -90,42 +147,96 @@ include 'includes/header.php';
     <button class="btn btn-primary" onclick="showAddModal()">+ Neue Veranstaltung</button>
 </div>
 
-<div class="table-responsive">
-    <table class="data-table">
-        <thead>
-            <tr>
-                <th>Datum</th>
-                <th>Titel</th>
-                <th>Ort</th>
-                <th>Status</th>
-                <th>Veröffentlicht</th>
-                <th>Aktionen</th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php foreach ($events as $event): ?>
+<!-- Upcoming Events -->
+<div class="section-card">
+    <h2>Anstehende Veranstaltungen (<?php echo count($upcoming_events); ?>)</h2>
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
                 <tr>
-                    <td><?php echo format_datetime($event['event_date']); ?></td>
-                    <td><?php echo htmlspecialchars($event['title']); ?></td>
-                    <td><?php echo htmlspecialchars($event['location']); ?></td>
-                    <td>
-                        <span class="badge <?php echo $event['status'] === 'upcoming' ? 'badge-success' : 'badge-warning'; ?>">
-                            <?php echo $event['status'] === 'upcoming' ? 'Anstehend' : 'Vergangen'; ?>
-                        </span>
-                    </td>
-                    <td>
-                        <span class="badge <?php echo $event['published'] ? 'badge-success' : 'badge-warning'; ?>">
-                            <?php echo $event['published'] ? 'Ja' : 'Nein'; ?>
-                        </span>
-                    </td>
-                    <td class="actions">
-                        <button class="btn btn-sm btn-secondary" onclick='editEvent(<?php echo json_encode($event); ?>)'>Bearbeiten</button>
-                        <button class="btn btn-sm btn-danger" onclick="deleteEvent(<?php echo $event['id']; ?>)">Löschen</button>
-                    </td>
+                    <th>Datum</th>
+                    <th>Titel</th>
+                    <th>Ort</th>
+                    <th>Bilder</th>
+                    <th>Veröffentlicht</th>
+                    <th>Aktionen</th>
                 </tr>
-            <?php endforeach; ?>
-        </tbody>
-    </table>
+            </thead>
+            <tbody>
+                <?php if (empty($upcoming_events)): ?>
+                    <tr>
+                        <td colspan="6" style="text-align: center; color: #999;">Keine anstehenden Veranstaltungen</td>
+                    </tr>
+                <?php else: ?>
+                    <?php foreach ($upcoming_events as $event): 
+                        $images = get_event_images($event['id']);
+                    ?>
+                        <tr>
+                            <td><?php echo format_datetime($event['event_date']); ?></td>
+                            <td><?php echo htmlspecialchars($event['title']); ?></td>
+                            <td><?php echo htmlspecialchars($event['location']); ?></td>
+                            <td><?php echo count($images); ?> Bilder</td>
+                            <td>
+                                <span class="badge <?php echo $event['published'] ? 'badge-success' : 'badge-warning'; ?>">
+                                    <?php echo $event['published'] ? 'Ja' : 'Nein'; ?>
+                                </span>
+                            </td>
+                            <td class="actions">
+                                <button class="btn btn-sm btn-secondary" onclick='editEvent(<?php echo json_encode($event); ?>)'>Bearbeiten</button>
+                                <button class="btn btn-sm btn-danger" onclick="deleteEvent(<?php echo $event['id']; ?>)">Löschen</button>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Past Events -->
+<div class="section-card" style="margin-top: 2rem;">
+    <h2>Vergangene Veranstaltungen (<?php echo count($past_events); ?>)</h2>
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Datum</th>
+                    <th>Titel</th>
+                    <th>Ort</th>
+                    <th>Bilder</th>
+                    <th>Veröffentlicht</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php if (empty($past_events)): ?>
+                    <tr>
+                        <td colspan="6" style="text-align: center; color: #999;">Keine vergangenen Veranstaltungen</td>
+                    </tr>
+                <?php else: ?>
+                    <?php foreach ($past_events as $event): 
+                        $images = get_event_images($event['id']);
+                    ?>
+                        <tr>
+                            <td><?php echo format_datetime($event['event_date']); ?></td>
+                            <td><?php echo htmlspecialchars($event['title']); ?></td>
+                            <td><?php echo htmlspecialchars($event['location']); ?></td>
+                            <td><?php echo count($images); ?> Bilder</td>
+                            <td>
+                                <span class="badge <?php echo $event['published'] ? 'badge-success' : 'badge-warning'; ?>">
+                                    <?php echo $event['published'] ? 'Ja' : 'Nein'; ?>
+                                </span>
+                            </td>
+                            <td class="actions">
+                                <button class="btn btn-sm btn-secondary" onclick='editEvent(<?php echo json_encode($event); ?>)'>Bearbeiten</button>
+                                <button class="btn btn-sm btn-danger" onclick="deleteEvent(<?php echo $event['id']; ?>)">Löschen</button>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
 </div>
 
 <!-- Add/Edit Modal -->
@@ -133,7 +244,7 @@ include 'includes/header.php';
     <div class="modal-content">
         <span class="close" onclick="closeModal()">&times;</span>
         <h2 id="modalTitle">Veranstaltung hinzufügen</h2>
-        <form method="POST" action="">
+        <form method="POST" action="" enctype="multipart/form-data">
             <input type="hidden" name="action" id="formAction" value="add">
             <input type="hidden" name="id" id="eventId">
             
@@ -172,6 +283,12 @@ include 'includes/header.php';
             <div class="form-group">
                 <label for="description">Beschreibung</label>
                 <textarea id="description" name="description" rows="5"></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="images">Bilder hochladen</label>
+                <input type="file" id="images" name="images[]" accept="image/*" multiple>
+                <small>Sie können mehrere Bilder auswählen (JPG, PNG, max. 5MB pro Bild)</small>
             </div>
             
             <div class="form-group checkbox">
