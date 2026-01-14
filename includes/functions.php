@@ -20,6 +20,19 @@ function is_logged_in() {
     return isset($_SESSION['user_id']) && !empty($_SESSION['user_id']);
 }
 
+// Ensure user is authenticated and optionally has a required role
+function check_auth($required_role = null) {
+    if (!is_logged_in()) {
+        $_SESSION['redirect_to'] = $_SERVER['REQUEST_URI'] ?? null;
+        redirect('login.php');
+    }
+
+    if ($required_role !== null && !has_role($required_role)) {
+        $_SESSION['error'] = 'Zugriff verweigert.';
+        redirect('dashboard.php');
+    }
+}
+
 /**
  * Check if user has specific role
  */
@@ -300,7 +313,29 @@ function can_edit_cash() {
         return false;
     }
     $role = $_SESSION['user_role'] ?? '';
+    return in_array($role, ['admin', 'kassenpruefer', 'accountant']);
+}
+
+/**
+ * Check if user can check transactions (admin or kassenpruefer)
+ */
+function can_check_transactions() {
+    if (!is_logged_in()) {
+        return false;
+    }
+    $role = $_SESSION['user_role'] ?? '';
     return in_array($role, ['admin', 'kassenpruefer']);
+}
+
+/**
+ * Check if a transaction is locked (finalized in a check period)
+ */
+function is_transaction_locked($transaction_id) {
+    $db = getDBConnection();
+    $stmt = $db->prepare("SELECT checked_in_period_id FROM transactions WHERE id = :id");
+    $stmt->execute(['id' => $transaction_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $result && $result['checked_in_period_id'] !== null;
 }
 
 /**
@@ -371,7 +406,7 @@ function get_transaction_categories() {
  * Upload CSV transactions
  */
 function upload_csv_transactions($file) {
-    if ($file['size'] == 0 || !in_array($file['type'], ['text/csv', 'application/vnd.ms-excel'])) {
+    if ($file['size'] == 0 || !in_array($file['type'], ['text/csv', 'application/vnd.ms-excel', 'text/plain'])) {
         return ['success' => false, 'error' => 'Invalid file type'];
     }
     
@@ -379,48 +414,154 @@ function upload_csv_transactions($file) {
     $rows = [];
     $errors = [];
     $inserted = 0;
+    $skipped = 0;
+    $skipped_dates = [];
+    $user_id = isset($_SESSION['user_id']) ? $_SESSION['user_id'] : 1;
     
     if (($handle = fopen($file['tmp_name'], 'r')) !== FALSE) {
-        // Skip header row
-        fgetcsv($handle);
+        // Skip header row - use semicolon delimiter for German bank CSV
+        fgetcsv($handle, 0, ';');
         
+        // First pass: collect all dates from CSV and parse all transactions
+        $transactions_to_import = [];
+        $csv_dates = [];
+        $line_number = 1;
+        
+        while (($data = fgetcsv($handle, 0, ';')) !== FALSE) {
+            $line_number++;
+            
+            // German bank CSV format:
+            // 0: Auftragskonto, 1: Buchungstag, 2: Valutadatum, 3: Buchungstext, 
+            // 4: Verwendungszweck, 5: Beguenstigter/Zahlungspflichtiger, 6: Kontonummer/IBAN, 
+            // 7: BIC, 8: Betrag, 9: Waehrung, 10: Info, 11: Kategorie
+            
+            if (count($data) < 9) {
+                $errors[] = "Zeile $line_number: Ungültige Anzahl von Spalten (" . count($data) . ")";
+                continue;
+            }
+            
+            try {
+                // Parse date (DD.MM.YY format to YYYY-MM-DD)
+                $booking_date_str = trim($data[1]);
+                if (preg_match('/^(\d{2})\.(\d{2})\.(\d{2,4})$/', $booking_date_str, $matches)) {
+                    $day = $matches[1];
+                    $month = $matches[2];
+                    $year = $matches[3];
+                    // Convert 2-digit year to 4-digit
+                    if (strlen($year) == 2) {
+                        $year = '20' . $year;
+                    }
+                    $booking_date = "$year-$month-$day";
+                } else {
+                    $errors[] = "Zeile $line_number: Ungültiges Datumsformat '$booking_date_str'";
+                    continue;
+                }
+                
+                // Parse amount (replace comma with dot, remove spaces)
+                $amount_str = str_replace(',', '.', str_replace(' ', '', trim($data[8])));
+                $amount = floatval($amount_str);
+                
+                // Convert encoding from ISO-8859-1/Windows-1252 to UTF-8 for German characters
+                // Truncate to fit database column limits: booking_text(200), payer(100), iban(34)
+                $booking_text = mb_substr(mb_convert_encoding(trim($data[3]), 'UTF-8', 'ISO-8859-1'), 0, 200);
+                $purpose = mb_convert_encoding(trim($data[4]), 'UTF-8', 'ISO-8859-1'); // TEXT field, no limit
+                $payer = mb_substr(mb_convert_encoding(trim($data[5]), 'UTF-8', 'ISO-8859-1'), 0, 100);
+                $iban = mb_substr(mb_convert_encoding(trim($data[6]), 'UTF-8', 'ISO-8859-1'), 0, 34);
+                
+                // Store transaction for potential import
+                $transactions_to_import[] = [
+                    'booking_date' => $booking_date,
+                    'booking_text' => $booking_text,
+                    'purpose' => $purpose,
+                    'payer' => $payer,
+                    'iban' => $iban,
+                    'amount' => $amount,
+                    'line_number' => $line_number
+                ];
+                
+                // Collect unique dates
+                $csv_dates[$booking_date] = true;
+                
+            } catch (Exception $e) {
+                $errors[] = "Zeile $line_number: " . $e->getMessage();
+            }
+        }
+        fclose($handle);
+        
+        // Check which dates already exist in database
+        $existing_dates = [];
+        if (!empty($csv_dates)) {
+            $date_list = array_keys($csv_dates);
+            $placeholders = str_repeat('?,', count($date_list) - 1) . '?';
+            $stmt = $db->prepare("SELECT DISTINCT booking_date FROM transactions WHERE booking_date IN ($placeholders)");
+            $stmt->execute($date_list);
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $existing_dates[$row['booking_date']] = true;
+            }
+        }
+        
+        // Now import only transactions for dates that don't exist yet
         $db->beginTransaction();
         try {
-            $stmt = $db->prepare("INSERT INTO transactions (booking_date, booking_text, purpose, payer, iban, amount, category, comment, created_by) 
-                                   VALUES (:booking_date, :booking_text, :purpose, :payer, :iban, :amount, :category, :comment, :created_by)");
+            $insert_stmt = $db->prepare("INSERT INTO transactions 
+                                         (booking_date, booking_text, purpose, payer, iban, amount, created_by) 
+                                         VALUES (:booking_date, :booking_text, :purpose, :payer, :iban, :amount, :created_by)");
             
-            while (($data = fgetcsv($handle)) !== FALSE) {
-                if (count($data) >= 7) {
-                    try {
-                        $stmt->execute([
-                            ':booking_date' => $data[0] ?? null,
-                            ':booking_text' => $data[1] ?? null,
-                            ':purpose' => $data[2] ?? null,
-                            ':payer' => $data[3] ?? null,
-                            ':iban' => $data[4] ?? null,
-                            ':amount' => $data[5] ?? 0,
-                            ':category' => $data[6] ?? null,
-                            ':comment' => $data[7] ?? null,
-                            ':created_by' => $user_id
-                        ]);
-                        $inserted++;
-                    } catch (Exception $e) {
-                        $errors[] = "Row " . ($inserted + 1) . ": " . $e->getMessage();
+            foreach ($transactions_to_import as $trans) {
+                // Skip if this date already exists in database
+                if (isset($existing_dates[$trans['booking_date']])) {
+                    $skipped++;
+                    if (!isset($skipped_dates[$trans['booking_date']])) {
+                        $skipped_dates[$trans['booking_date']] = 0;
                     }
+                    $skipped_dates[$trans['booking_date']]++;
+                    continue;
+                }
+                
+                try {
+                    $insert_stmt->execute([
+                        ':booking_date' => $trans['booking_date'],
+                        ':booking_text' => $trans['booking_text'],
+                        ':purpose' => $trans['purpose'],
+                        ':payer' => $trans['payer'],
+                        ':iban' => $trans['iban'],
+                        ':amount' => $trans['amount'],
+                        ':created_by' => $user_id
+                    ]);
+                    $inserted++;
+                } catch (Exception $e) {
+                    $errors[] = "Zeile {$trans['line_number']}: " . $e->getMessage();
                 }
             }
+            
             $db->commit();
         } catch (Exception $e) {
             $db->rollBack();
             return ['success' => false, 'error' => $e->getMessage()];
         }
-        fclose($handle);
+    }
+    
+    $message = "Erfolgreich $inserted Transaktionen importiert";
+    if ($skipped > 0) {
+        $dates_info = array();
+        foreach ($skipped_dates as $date => $count) {
+            $dates_info[] = date('d.m.Y', strtotime($date)) . " ($count)";
+        }
+        $message .= ", $skipped Transaktionen übersprungen (bereits importierte Tage: " . implode(', ', $dates_info) . ")";
+    }
+    if (count($errors) > 0) {
+        $message .= ". Fehler: " . implode(', ', array_slice($errors, 0, 5));
+        if (count($errors) > 5) {
+            $message .= " (und " . (count($errors) - 5) . " weitere)";
+        }
     }
     
     return [
         'success' => true,
         'inserted' => $inserted,
-        'errors' => $errors
+        'skipped' => $skipped,
+        'errors' => $errors,
+        'message' => $message
     ];
 }
 

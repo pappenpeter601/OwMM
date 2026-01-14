@@ -61,7 +61,16 @@
                 </a>
                 <?php endif; ?>
                 
+                <?php if (can_check_transactions()): ?>
+                <a href="check_periods.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'check_periods.php' || basename($_SERVER['PHP_SELF']) == 'transaction_checking.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tasks"></i> Prüfperioden
+                </a>
+                <?php endif; ?>
+                
                 <?php if (has_role('admin')): ?>
+                <a href="kassenpruefer_assignments.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'kassenpruefer_assignments.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-user-check"></i> Kassenprüfer
+                </a>
                 <a href="messages.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'messages.php' ? 'active' : ''; ?>">
                     <i class="fas fa-envelope"></i> Nachrichten
                 </a>

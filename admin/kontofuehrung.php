@@ -17,7 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if (isset($_FILES['csv_file']) && $_FILES['csv_file']['error'] === UPLOAD_ERR_OK) {
         $result = upload_csv_transactions($_FILES['csv_file']);
         if ($result['success']) {
-            $message = "Erfolgreich {$result['inserted']} Transaktionen importiert";
+            $message = $result['message'];
         } else {
             $error = $result['error'];
         }
@@ -32,31 +32,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     
     if ($action === 'update_transaction') {
         $id = $_POST['id'];
-        $category_id = !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null;
-        $comment = $_POST['comment'];
-        $business_year = !empty($_POST['business_year']) ? (int)$_POST['business_year'] : null;
         
-        $stmt = $db->prepare("UPDATE transactions SET category_id = :category_id, comment = :comment, business_year = :business_year WHERE id = :id");
-        $stmt->execute([
-            'category_id' => $category_id,
-            'comment' => $comment,
-            'business_year' => $business_year,
-            'id' => $id
-        ]);
-        $message = "Transaktion aktualisiert";
+        // Check if transaction is locked
+        if (is_transaction_locked($id)) {
+            $error = "Diese Transaktion ist gesperrt (finalisiert in einer Prüfperiode) und kann nicht mehr bearbeitet werden.";
+        } else {
+            $category_id = !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null;
+            $comment = $_POST['comment'];
+            $business_year = !empty($_POST['business_year']) ? (int)$_POST['business_year'] : null;
+            
+            $stmt = $db->prepare("UPDATE transactions SET category_id = :category_id, comment = :comment, business_year = :business_year WHERE id = :id");
+            $stmt->execute([
+                'category_id' => $category_id,
+                'comment' => $comment,
+                'business_year' => $business_year,
+                'id' => $id
+            ]);
+            $message = "Transaktion aktualisiert";
+        }
     } elseif ($action === 'delete_transaction') {
         $id = $_POST['id'];
         
-        // Delete documents
-        $stmt = $db->prepare("SELECT id FROM transaction_documents WHERE transaction_id = :id");
-        $stmt->execute(['id' => $id]);
-        foreach ($stmt->fetchAll() as $doc) {
-            delete_transaction_document($doc['id']);
+        // Check if transaction is locked
+        if (is_transaction_locked($id)) {
+            $error = "Diese Transaktion ist gesperrt (finalisiert in einer Prüfperiode) und kann nicht gelöscht werden.";
+        } else {
+            // Delete documents
+            $stmt = $db->prepare("SELECT id FROM transaction_documents WHERE transaction_id = :id");
+            $stmt->execute(['id' => $id]);
+            foreach ($stmt->fetchAll() as $doc) {
+                delete_transaction_document($doc['id']);
+            }
+            
+            $stmt = $db->prepare("DELETE FROM transactions WHERE id = :id");
+            $stmt->execute(['id' => $id]);
+            $message = "Transaktion gelöscht";
         }
-        
-        $stmt = $db->prepare("DELETE FROM transactions WHERE id = :id");
-        $stmt->execute(['id' => $id]);
-        $message = "Transaktion gelöscht";
     } elseif ($action === 'upload_document') {
         $transaction_id = $_POST['transaction_id'];
         if (isset($_FILES['document']) && $_FILES['document']['error'] === UPLOAD_ERR_OK) {
@@ -141,7 +152,14 @@ $business_year_filter = $_GET['business_year'] ?? '';
 $start_date = $_GET['start_date'] ?? '';
 $end_date = $_GET['end_date'] ?? '';
 
-// Convert German date format (dd.mm.yyyy) to SQL format (yyyy-mm-dd)
+// Set default date range to current year if not specified
+if (empty($start_date) && empty($end_date)) {
+    $start_date = date('Y') . '-01-01';
+    $end_date = date('Y') . '-12-31';
+}
+
+// Convert German date format (dd.mm.yyyy) to SQL format (yyyy-mm-dd) if needed
+// HTML5 date input already provides yyyy-mm-dd format
 if ($start_date && preg_match('/^(\d{2})\.(\d{2})\.(\d{4})$/', $start_date, $matches)) {
     $start_date = $matches[3] . '-' . $matches[2] . '-' . $matches[1];
 }
@@ -283,7 +301,8 @@ include 'includes/header.php';
             <div class="form-group flex-grow">
                 <label for="csv_file">CSV-Datei (Bankexport)</label>
                 <input type="file" id="csv_file" name="csv_file" accept=".csv" required>
-                <small>Spalten: Buchungstag, Buchungstext, Verwendungszweck, Zahlungspflichtiger, IBAN, Betrag, Kategorie</small>
+                <small>Format: Deutscher Bankexport mit Semikolon-Trennung (Auftragskonto;Buchungstag;Valutadatum;Buchungstext;Verwendungszweck;Zahlungspflichtiger;IBAN;BIC;Betrag;...)<br>
+                Import-Logik: Nur Transaktionen für neue Tage werden importiert. Bereits importierte Tage werden komplett übersprungen (inkl. identischer Transaktionen).</small>
             </div>
             <div class="form-group">
                 <button type="submit" class="btn btn-primary">Importieren</button>
@@ -324,15 +343,13 @@ include 'includes/header.php';
             </div>
             <div class="form-group">
                 <label for="start_date">Von Datum</label>
-                <input type="text" id="start_date" name="start_date" placeholder="dd.mm.yyyy" 
-                       pattern="\d{2}\.\d{2}\.\d{4}" 
-                       value="<?php echo $start_date ? date('d.m.Y', strtotime($start_date)) : ''; ?>">
+                <input type="date" id="start_date" name="start_date" 
+                       value="<?php echo $start_date ? $start_date : ''; ?>">
             </div>
             <div class="form-group">
                 <label for="end_date">Bis Datum</label>
-                <input type="text" id="end_date" name="end_date" placeholder="dd.mm.yyyy" 
-                       pattern="\d{2}\.\d{2}\.\d{4}"
-                       value="<?php echo $end_date ? date('d.m.Y', strtotime($end_date)) : ''; ?>">
+                <input type="date" id="end_date" name="end_date"
+                       value="<?php echo $end_date ? $end_date : ''; ?>">
             </div>
             <div class="form-group">
                 <button type="submit" class="btn btn-secondary">Filtern</button>
@@ -356,6 +373,7 @@ include 'includes/header.php';
                     <th>Betrag</th>
                     <th>Kategorie</th>
                     <th>GJ</th>
+                    <th>Status</th>
                     <th>Dokumente</th>
                     <th>Verpflichtungen</th>
                     <th>Notizen</th>
@@ -363,8 +381,10 @@ include 'includes/header.php';
                 </tr>
             </thead>
             <tbody>
-                <?php foreach ($transactions as $transaction): ?>
-                    <tr class="<?php echo $transaction['amount'] > 0 ? 'income-row' : 'expense-row'; ?>">
+                <?php foreach ($transactions as $transaction): 
+                    $is_locked = !empty($transaction['checked_in_period_id']);
+                ?>
+                    <tr class="<?php echo $transaction['amount'] > 0 ? 'income-row' : 'expense-row'; ?> <?php echo $is_locked ? 'locked-row' : ''; ?>">
                         <td class="date"><?php echo date('d.m.Y', strtotime($transaction['booking_date'])); ?></td>
                         <td class="purpose"><?php echo htmlspecialchars($transaction['purpose'] ?? $transaction['booking_text']); ?></td>
                         <td class="payer"><?php echo htmlspecialchars($transaction['payer'] ?? ''); ?></td>
@@ -375,7 +395,7 @@ include 'includes/header.php';
                             <form method="POST" class="inline-form">
                                 <input type="hidden" name="action" value="update_transaction">
                                 <input type="hidden" name="id" value="<?php echo $transaction['id']; ?>">
-                                <select name="category_id" class="category-select" onchange="this.form.submit()">
+                                <select name="category_id" class="category-select" onchange="this.form.submit()" <?php echo $is_locked ? 'disabled' : ''; ?>>
                                     <option value="">—</option>
                                     <?php foreach ($categories as $cat): ?>
                                         <option value="<?php echo htmlspecialchars($cat['id']); ?>"
@@ -391,8 +411,19 @@ include 'includes/header.php';
                                 <input type="hidden" name="action" value="update_transaction">
                                 <input type="hidden" name="id" value="<?php echo $transaction['id']; ?>">
                                 <input type="number" name="business_year" value="<?php echo htmlspecialchars($transaction['business_year']); ?>" 
-                                       min="2000" max="2100" style="width: 60px;" onchange="this.form.submit()">
+                                       min="2000" max="2100" style="width: 60px;" onchange="this.form.submit()" <?php echo $is_locked ? 'disabled' : ''; ?>>
                             </form>
+                        </td>
+                        <td class="check-status">
+                            <?php if ($is_locked): ?>
+                                <span class="badge badge-locked" title="Transaktion ist finalisiert und gesperrt">🔒 Gesperrt</span>
+                            <?php elseif ($transaction['check_status'] === 'checked'): ?>
+                                <span class="badge badge-checked" title="Transaktion wurde geprüft">✓ Geprüft</span>
+                            <?php elseif ($transaction['check_status'] === 'under_investigation'): ?>
+                                <span class="badge badge-investigation" title="Transaktion wird geprüft">⚠️ In Prüfung</span>
+                            <?php else: ?>
+                                <span class="badge badge-unchecked" title="Transaktion noch nicht geprüft">⏳ Ungeprüft</span>
+                            <?php endif; ?>
                         </td>
                         <td class="documents">
                             <button class="btn btn-sm btn-secondary" 
@@ -464,17 +495,21 @@ include 'includes/header.php';
                                 
                                 <div class="upload-document">
                                     <h4>Neues Dokument verknüpfen</h4>
-                                    <form method="POST" enctype="multipart/form-data" class="upload-form">
-                                        <input type="hidden" name="action" value="upload_document">
-                                        <input type="hidden" name="transaction_id" value="<?php echo $transaction['id']; ?>">
-                                        <div class="form-row">
-                                            <div class="form-group flex-grow">
-                                                <input type="file" name="document" accept=".pdf,.jpg,.png" required>
-                                                <small>PDF, JPG oder PNG (max. 5MB)</small>
+                                    <?php if ($is_locked): ?>
+                                        <p class="alert alert-warning">🔒 Diese Transaktion ist gesperrt. Dokumente können nicht mehr hinzugefügt werden.</p>
+                                    <?php else: ?>
+                                        <form method="POST" enctype="multipart/form-data" class="upload-form">
+                                            <input type="hidden" name="action" value="upload_document">
+                                            <input type="hidden" name="transaction_id" value="<?php echo $transaction['id']; ?>">
+                                            <div class="form-row">
+                                                <div class="form-group flex-grow">
+                                                    <input type="file" name="document" accept=".pdf,.jpg,.png" required>
+                                                    <small>PDF, JPG oder PNG (max. 5MB)</small>
+                                                </div>
+                                                <button type="submit" class="btn btn-primary">Hochladen</button>
                                             </div>
-                                            <button type="submit" class="btn btn-primary">Hochladen</button>
-                                        </div>
-                                    </form>
+                                        </form>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </td>
@@ -1068,6 +1103,49 @@ function selectObligation(transactionId, obligationId, displayText, amount) {
     flex: 1;
     padding: 1rem;
     overflow: auto;
+}
+
+/* Check Status Badges */
+.badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    font-weight: bold;
+    white-space: nowrap;
+}
+
+.badge-locked {
+    background-color: #e91e63;
+    color: white;
+}
+
+.badge-checked {
+    background-color: #4caf50;
+    color: white;
+}
+
+.badge-investigation {
+    background-color: #ff9800;
+    color: white;
+}
+
+.badge-unchecked {
+    background-color: #9e9e9e;
+    color: white;
+}
+
+/* Locked Row Styling */
+.locked-row {
+    background-color: #ffebee !important;
+    opacity: 0.9;
+}
+
+.locked-row select:disabled,
+.locked-row input:disabled {
+    background-color: #f5f5f5;
+    cursor: not-allowed;
+    opacity: 0.6;
 }
 </style>
 

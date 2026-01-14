@@ -12,7 +12,108 @@ $page_title = 'Dashboard';
 include 'includes/header.php';
 ?>
 
-<div class="dashboard-grid">
+<?php if (can_edit_cash() || has_role('admin')): ?>
+<div class="quick-stats">
+    <h2>Übersicht</h2>
+    <div class="stats-grid">
+        <?php
+        $db = getDBConnection();
+        
+        if (can_edit_cash()) {
+            // Cash transactions count and balance
+            $stmt = $db->query("SELECT COUNT(*) as count FROM transactions");
+            $trans_count = $stmt->fetch()['count'];
+            $stmt = $db->query("SELECT COALESCE(SUM(amount), 0) as total FROM transactions");
+            $balance = $stmt->fetch()['total'];
+            
+            echo '<div class="stat-box">
+                    <div class="stat-label" style="font-weight: bold;">Transaktionen</div>
+                    <div class="stat-number">' . $trans_count . '</div>
+                  </div>
+                  <div class="stat-box">
+                    <div class="stat-label" style="font-weight: bold;">Nettosaldo</div>
+                    <div class="stat-number" style="color: ' . ($balance >= 0 ? '#4caf50' : '#f44336') . '; font-size: 2rem; font-weight: bold;">' . number_format($balance, 2, ',', '.') . ' €</div>
+                  </div>';
+            
+            // Member statistics
+            $stmt = $db->query("SELECT 
+                                COUNT(*) as total,
+                                SUM(CASE WHEN member_type = 'active' AND active = 1 THEN 1 ELSE 0 END) as active_members,
+                                SUM(CASE WHEN member_type = 'supporter' AND active = 1 THEN 1 ELSE 0 END) as supporters
+                                FROM members");
+            $member_stats = $stmt->fetch();
+            
+            echo '<div class="stat-box">
+                    <div class="stat-label" style="font-weight: bold;">Einsatzeinheit</div>
+                    <div class="stat-number">' . $member_stats['active_members'] . '</div>
+                  </div>
+                  <div class="stat-box">
+                    <div class="stat-label" style="font-weight: bold;">Förderer</div>
+                    <div class="stat-number">' . $member_stats['supporters'] . '</div>
+                  </div>';
+            
+            // Outstanding obligations for ACTIVE members
+            $stmt = $db->query("
+                SELECT 
+                    COUNT(*) as count,
+                    COALESCE(SUM(fee_amount - paid_amount), 0) as total_outstanding
+                FROM member_fee_obligations o
+                INNER JOIN members m ON o.member_id = m.id
+                WHERE m.active = 1 
+                    AND m.member_type = 'active'
+                    AND o.status IN ('open', 'partial')
+            ");
+            $active_outstanding = $stmt->fetch();
+            
+            echo '<div class="stat-box">
+                    <div class="stat-label" style="font-weight: bold;">Offene Forderungen (Aktive)</div>
+                    <div class="stat-number" style="color: ' . ($active_outstanding['count'] > 0 ? '#ff9800' : '#4caf50') . '">' . $active_outstanding['count'] . '</div>
+                  </div>';
+            
+            echo '<div class="stat-box">
+                    <div class="stat-label" style="font-weight: bold;">Ausstehend (Aktive)</div>
+                    <div class="stat-number" style="color: ' . ($active_outstanding['total_outstanding'] > 0 ? '#ff9800' : '#4caf50') . '; font-size: 1.8rem; font-weight: bold;">' . number_format($active_outstanding['total_outstanding'], 2, ',', '.') . ' €</div>
+                  </div>';
+            
+            // Outstanding obligations for SUPPORTER members
+            $stmt = $db->query("
+                SELECT 
+                    COUNT(*) as count,
+                    COALESCE(SUM(fee_amount - paid_amount), 0) as total_outstanding
+                FROM member_fee_obligations o
+                INNER JOIN members m ON o.member_id = m.id
+                WHERE m.active = 1 
+                    AND m.member_type = 'supporter'
+                    AND o.status IN ('open', 'partial')
+            ");
+            $supporter_outstanding = $stmt->fetch();
+            
+            echo '<div class="stat-box">
+                    <div class="stat-label" style="font-weight: bold;">Offene Forderungen (Förderer)</div>
+                    <div class="stat-number" style="color: ' . ($supporter_outstanding['count'] > 0 ? '#ff9800' : '#4caf50') . '">' . $supporter_outstanding['count'] . '</div>
+                  </div>';
+            
+            echo '<div class="stat-box">
+                    <div class="stat-label" style="font-weight: bold;">Ausstehend (Förderer)</div>
+                    <div class="stat-number" style="color: ' . ($supporter_outstanding['total_outstanding'] > 0 ? '#ff9800' : '#4caf50') . '; font-size: 1.8rem; font-weight: bold;">' . number_format($supporter_outstanding['total_outstanding'], 2, ',', '.') . ' €</div>
+                  </div>';
+        }
+        
+        // Messages count (for admins)
+        if (has_role('admin')) {
+            $stmt = $db->query("SELECT COUNT(*) as count FROM contact_messages WHERE status = 'new'");
+            $msg_count = $stmt->fetch()['count'];
+            echo '<div class="stat-box">
+                    <div class="stat-label" style="font-weight: bold;">Neue Nachrichten</div>
+                    <div class="stat-number" style="color: ' . ($msg_count > 0 ? '#ff9800' : '#4caf50') . '">' . $msg_count . '</div>
+                  </div>';
+        }
+        ?>
+    </div>
+</div>
+<?php endif; ?>
+
+<div class="dashboard-grid" style="margin-top: 30px;">
     <?php if (can_edit_operations()): ?>
     <div class="dashboard-card">
         <div class="card-icon">📋</div>
@@ -53,6 +154,13 @@ include 'includes/header.php';
         <h3>Kontaktanfragen</h3>
         <p>Eingegangene Nachrichten ansehen</p>
         <a href="messages.php" class="btn btn-primary">Ansehen</a>
+    </div>
+
+    <div class="dashboard-card">
+        <div class="card-icon">🧾</div>
+        <h3>Kassenprüfer</h3>
+        <p>Prüferrollen zuweisen und verwalten</p>
+        <a href="kassenpruefer_assignments.php" class="btn btn-primary">Verwalten</a>
     </div>
     
     <div class="dashboard-card">
@@ -101,8 +209,9 @@ include 'includes/header.php';
     <?php endif; ?>
 </div>
 
+<?php if (can_edit_operations() || can_edit_events() || has_role('admin')): ?>
 <div class="quick-stats">
-    <h2>Übersicht</h2>
+    <h2>Weitere Statistiken</h2>
     <div class="stats-grid">
         <?php
         $db = getDBConnection();
@@ -136,70 +245,9 @@ include 'includes/header.php';
                     <div class="stat-label">Neue Nachrichten</div>
                   </div>';
         }
-        
-        // Cash transactions count
-        if (can_edit_cash()) {
-            $stmt = $db->query("SELECT COUNT(*) as count FROM transactions");
-            $trans_count = $stmt->fetch()['count'];
-            $stmt = $db->query("SELECT SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as total FROM transactions");
-            $balance = $stmt->fetch()['total'];
-            echo '<div class="stat-box">
-                    <div class="stat-number">' . $trans_count . '</div>
-                    <div class="stat-label">Transaktionen</div>
-                  </div>
-                  <div class="stat-box">
-                    <div class="stat-number" style="color: ' . ($balance >= 0 ? '#4caf50' : '#f44336') . '; font-size: 1.8rem;">' . number_format($balance, 2, ',', '.') . ' €</div>
-                    <div class="stat-label">Gesamtsaldo</div>
-                  </div>';
-            
-            // Member statistics
-            $stmt = $db->query("SELECT 
-                                COUNT(*) as total,
-                                SUM(CASE WHEN member_type = 'active' AND active = 1 THEN 1 ELSE 0 END) as active_members,
-                                SUM(CASE WHEN member_type = 'supporter' AND active = 1 THEN 1 ELSE 0 END) as supporters
-                                FROM members");
-            $member_stats = $stmt->fetch();
-            
-            echo '<div class="stat-box">
-                    <div class="stat-number">' . $member_stats['active_members'] . '</div>
-                    <div class="stat-label">Einsatzeinheit</div>
-                  </div>
-                  <div class="stat-box">
-                    <div class="stat-number">' . $member_stats['supporters'] . '</div>
-                    <div class="stat-label">Förderer</div>
-                  </div>';
-            
-            // Outstanding payments - all years
-            $stmt = $db->query("
-                SELECT 
-                    COUNT(DISTINCT m.id) as count,
-                    COALESCE(SUM(o.amount - COALESCE(p.total_paid, 0)), 0) as total_outstanding
-                FROM members m
-                LEFT JOIN obligations o ON m.id = o.member_id
-                LEFT JOIN (
-                    SELECT member_id, obligation_id, SUM(amount) as total_paid
-                    FROM member_payments
-                    GROUP BY member_id, obligation_id
-                ) p ON o.member_id = p.member_id AND o.id = p.obligation_id
-                WHERE m.active = 1 
-                    AND o.amount > COALESCE(p.total_paid, 0)
-            ");
-            $outstanding_stats = $stmt->fetch();
-            $outstanding_count = $outstanding_stats['count'];
-            $outstanding_amount = $outstanding_stats['total_outstanding'];
-            
-            echo '<div class="stat-box">
-                    <div class="stat-number" style="color: ' . ($outstanding_count > 0 ? '#ff9800' : '#4caf50') . '">' . $outstanding_count . '</div>
-                    <div class="stat-label">Offene Forderungen</div>
-                  </div>';
-            
-            echo '<div class="stat-box">
-                    <div class="stat-number" style="color: ' . ($outstanding_amount > 0 ? '#ff9800' : '#4caf50') . '; font-size: 1.8rem;">' . number_format($outstanding_amount, 2, ',', '.') . ' €</div>
-                    <div class="stat-label">Ausstehender Betrag</div>
-                  </div>';
-        }
         ?>
     </div>
 </div>
+<?php endif; ?>
 
 <?php include 'includes/footer.php'; ?>
