@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `username` varchar(50) NOT NULL,
   `email` varchar(100) NOT NULL,
   `password` varchar(255) NOT NULL,
-  `role` enum('admin','board','pr_manager','event_manager','kassenpruefer','accountant') NOT NULL DEFAULT 'pr_manager',
+  `is_admin` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Admin users automatically have all permissions',
   `first_name` varchar(50) DEFAULT NULL,
   `last_name` varchar(50) DEFAULT NULL,
   `active` tinyint(1) NOT NULL DEFAULT 1,
@@ -354,8 +354,8 @@ CREATE TABLE IF NOT EXISTS `member_payments` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Insert default admin user (password: admin123 - CHANGE THIS!)
-INSERT INTO `users` (`username`, `email`, `password`, `role`, `first_name`, `last_name`) VALUES
-('admin', 'admin@example.com', '$2y$10$Q508QQp7rNEJLQXGlnmC2.uzCUmjeVW6PNNANDRzHmzl/9Okger9y', 'admin', 'Admin', 'User');
+INSERT INTO `users` (`username`, `email`, `password`, `is_admin`, `first_name`, `last_name`) VALUES
+('admin', 'admin@example.com', '$2y$10$Q508QQp7rNEJLQXGlnmC2.uzCUmjeVW6PNNANDRzHmzl/9Okger9y', 1, 'Admin', 'User');
 
 -- Insert default page content
 INSERT INTO `page_content` (`section_key`, `title`, `content`) VALUES

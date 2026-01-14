@@ -2,6 +2,7 @@
 require_once '../config/config.php';
 require_once '../config/database.php';
 require_once '../includes/functions.php';
+require_once '../includes/EmailService.php';
 
 // Check if user is admin
 if (!is_logged_in() || !has_role('admin')) {
@@ -65,17 +66,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $username = sanitize_input($_POST['username']);
             $email = sanitize_input($_POST['email']);
             $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
-            $role = $_POST['role'];
+            $is_admin = isset($_POST['is_admin']) ? 1 : 0;
             $first_name = sanitize_input($_POST['first_name']);
             $last_name = sanitize_input($_POST['last_name']);
             
-            $stmt = $db->prepare("INSERT INTO users (username, email, password, role, first_name, last_name) 
-                                   VALUES (:username, :email, :password, :role, :first_name, :last_name)");
+            $stmt = $db->prepare("INSERT INTO users (username, email, password, is_admin, first_name, last_name) 
+                                   VALUES (:username, :email, :password, :is_admin, :first_name, :last_name)");
             $stmt->execute([
                 'username' => $username,
                 'email' => $email,
                 'password' => $password,
-                'role' => $role,
+                'is_admin' => $is_admin,
                 'first_name' => $first_name,
                 'last_name' => $last_name
             ]);
@@ -134,6 +135,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute(['id' => $id]);
             $success = "Kategorie gelöscht";
         }
+    } elseif ($section === 'email') {
+        $action = $_POST['action'] ?? 'save';
+        
+        if ($action === 'save') {
+            try {
+                $smtp_host = trim($_POST['smtp_host']);
+                $smtp_port = (int)$_POST['smtp_port'];
+                $smtp_username = trim($_POST['smtp_username']);
+                $smtp_password = trim($_POST['smtp_password']);
+                $from_email = trim($_POST['from_email']);
+                $from_name = trim($_POST['from_name']);
+                $use_tls = isset($_POST['use_tls']) ? 1 : 0;
+                
+                if (!empty($smtp_password)) {
+                    $stmt = $db->prepare("UPDATE email_config SET smtp_host = ?, smtp_port = ?, smtp_username = ?, smtp_password = ?, from_email = ?, from_name = ?, use_tls = ? WHERE id = 1");
+                    $stmt->execute([$smtp_host, $smtp_port, $smtp_username, $smtp_password, $from_email, $from_name, $use_tls]);
+                } else {
+                    $stmt = $db->prepare("UPDATE email_config SET smtp_host = ?, smtp_port = ?, smtp_username = ?, from_email = ?, from_name = ?, use_tls = ? WHERE id = 1");
+                    $stmt->execute([$smtp_host, $smtp_port, $smtp_username, $from_email, $from_name, $use_tls]);
+                }
+                $success = "E-Mail-Einstellungen gespeichert.";
+            } catch (Exception $e) {
+                $error = "Fehler beim Speichern: " . $e->getMessage();
+            }
+        } elseif ($action === 'test') {
+            try {
+                $test_email = trim($_POST['test_email']);
+                if (!filter_var($test_email, FILTER_VALIDATE_EMAIL)) {
+                    throw new Exception("Ungültige E-Mail-Adresse");
+                }
+                $emailService = new EmailService();
+                $result = $emailService->sendTestEmail($test_email);
+                if ($result['success']) {
+                    $success = "Test-E-Mail erfolgreich an $test_email gesendet!";
+                } else {
+                    $error = "Fehler beim Senden: " . $result['error'];
+                }
+            } catch (Exception $e) {
+                $error = "Fehler: " . $e->getMessage();
+            }
+        }
+    } elseif ($section === 'permissions') {
+        $action = $_POST['action'];
+        
+        if ($action === 'grant') {
+            $user_id = (int)$_POST['user_id'];
+            $permission_id = (int)$_POST['permission_id'];
+            
+            $stmt = $db->prepare("INSERT IGNORE INTO user_permissions (user_id, permission_id, granted_by) VALUES (?, ?, ?)");
+            $stmt->execute([$user_id, $permission_id, $_SESSION['user_id']]);
+            $success = "Berechtigung zugewiesen";
+        } elseif ($action === 'revoke') {
+            $user_id = (int)$_POST['user_id'];
+            $permission_id = (int)$_POST['permission_id'];
+            
+            $stmt = $db->prepare("DELETE FROM user_permissions WHERE user_id = ? AND permission_id = ?");
+            $stmt->execute([$user_id, $permission_id]);
+            $success = "Berechtigung entzogen";
+        }
     }
 }
 
@@ -157,18 +217,94 @@ include 'includes/header.php';
     <div class="alert alert-success"><?php echo $success; ?></div>
 <?php endif; ?>
 
+<?php if (isset($error)): ?>
+    <div class="alert alert-error"><?php echo $error; ?></div>
+<?php endif; ?>
+
 <div class="page-header">
     <h1>Einstellungen</h1>
 </div>
 
 <div class="settings-tabs">
-    <button class="tab-btn active" onclick="showTab('social')">Social Media</button>
+    <button class="tab-btn active" onclick="showTab('email')">E-Mail</button>
+    <button class="tab-btn" onclick="showTab('social')">Social Media</button>
     <button class="tab-btn" onclick="showTab('categories')">Kategorien</button>
-    <button class="tab-btn" onclick="showTab('users')">Benutzer</button>
+    <button class="tab-btn" onclick="showTab('users')">Benutzer & Berechtigungen</button>
+</div>
+
+<!-- Email Tab -->
+<div id="email-tab" class="tab-content active">
+    <h2>E-Mail-Einstellungen</h2>
+    <p style="color: #666; margin-bottom: 20px;">Konfigurieren Sie die SMTP-Einstellungen für Magic Link E-Mails.</p>
+    
+    <?php
+    $stmt = $db->query("SELECT * FROM email_config WHERE id = 1");
+    $email_config = $stmt->fetch(PDO::FETCH_ASSOC);
+    ?>
+    
+    <form method="POST" style="max-width: 600px;">
+        <input type="hidden" name="section" value="email">
+        <input type="hidden" name="action" value="save">
+        
+        <div style="margin-bottom: 20px;">
+            <label style="display:block; margin-bottom: 8px; font-weight: bold;">SMTP Host</label>
+            <input type="text" name="smtp_host" value="<?php echo htmlspecialchars($email_config['smtp_host'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+            <small style="color: #999;">z.B. smtp.ionos.de, smtp.gmail.com</small>
+        </div>
+        
+        <div style="margin-bottom: 20px;">
+            <label style="display:block; margin-bottom: 8px; font-weight: bold;">SMTP Port</label>
+            <input type="number" name="smtp_port" value="<?php echo htmlspecialchars($email_config['smtp_port'] ?? 587); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+            <small style="color: #999;">Standard: 587 (TLS) oder 465 (SSL)</small>
+        </div>
+        
+        <div style="margin-bottom: 20px;">
+            <label style="display:flex; align-items: center; gap: 8px;">
+                <input type="checkbox" name="use_tls" <?php echo ($email_config['use_tls'] ?? 1) ? 'checked' : ''; ?>>
+                <span style="font-weight: bold;">TLS/STARTTLS verwenden</span>
+            </label>
+        </div>
+        
+        <div style="margin-bottom: 20px;">
+            <label style="display:block; margin-bottom: 8px; font-weight: bold;">SMTP Benutzername</label>
+            <input type="text" name="smtp_username" value="<?php echo htmlspecialchars($email_config['smtp_username'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+            <small style="color: #999;">Meist die vollständige E-Mail-Adresse</small>
+        </div>
+        
+        <div style="margin-bottom: 20px;">
+            <label style="display:block; margin-bottom: 8px; font-weight: bold;">SMTP Passwort</label>
+            <input type="password" name="smtp_password" placeholder="<?php echo $email_config['smtp_password'] ? '••••••••' : ''; ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            <small style="color: #999;">Leer lassen, um aktuelles Passwort beizubehalten</small>
+        </div>
+        
+        <div style="margin-bottom: 20px;">
+            <label style="display:block; margin-bottom: 8px; font-weight: bold;">Absender E-Mail</label>
+            <input type="email" name="from_email" value="<?php echo htmlspecialchars($email_config['from_email'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+        </div>
+        
+        <div style="margin-bottom: 20px;">
+            <label style="display:block; margin-bottom: 8px; font-weight: bold;">Absender Name</label>
+            <input type="text" name="from_name" value="<?php echo htmlspecialchars($email_config['from_name'] ?? 'OwMM Feuerwehr'); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+        </div>
+        
+        <button type="submit" class="btn btn-primary">Einstellungen speichern</button>
+    </form>
+    
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-top: 30px;">
+        <h3>Test-E-Mail senden</h3>
+        <p style="color: #666; margin-bottom: 15px;">Testen Sie die E-Mail-Konfiguration durch Versenden einer Test-E-Mail.</p>
+        
+        <form method="POST" style="display: flex; gap: 10px;">
+            <input type="hidden" name="section" value="email">
+            <input type="hidden" name="action" value="test">
+            <input type="email" name="test_email" placeholder="test@example.com" style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+            <button type="submit" class="btn btn-secondary">Test senden</button>
+        </form>
+    </div>
 </div>
 
 <!-- Social Media Tab -->
-<div id="social-tab" class="tab-content active">
+<div id="social-tab" class="tab-content">
     <h2>Social Media Links</h2>
     
     <div class="table-responsive">
@@ -280,40 +416,101 @@ include 'includes/header.php';
 
 <!-- Users Tab -->
 <div id="users-tab" class="tab-content">
-    <h2>Benutzer verwalten</h2>
+    <h2>Benutzer & Berechtigungen verwalten</h2>
+    <p style="color: #666; margin-bottom: 30px;">Verwalten Sie Benutzer und weisen Sie ihnen flexible Berechtigungen zu. Ein Benutzer kann mehrere Berechtigungen haben.</p>
     
-    <div class="table-responsive">
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Benutzername</th>
-                    <th>Name</th>
-                    <th>E-Mail</th>
-                    <th>Rolle</th>
-                    <th>Letzter Login</th>
-                    <th>Aktionen</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($users as $user): ?>
-                    <tr>
-                        <td><?php echo htmlspecialchars($user['username']); ?></td>
-                        <td><?php echo htmlspecialchars($user['first_name'] . ' ' . $user['last_name']); ?></td>
-                        <td><?php echo htmlspecialchars($user['email']); ?></td>
-                        <td><span class="badge badge-info"><?php echo htmlspecialchars($user['role']); ?></span></td>
-                        <td><?php echo $user['last_login'] ? format_datetime($user['last_login']) : 'Nie'; ?></td>
-                        <td class="actions">
-                            <?php if ($user['id'] != $_SESSION['user_id']): ?>
-                                <button class="btn btn-sm btn-danger" onclick="deleteUser(<?php echo $user['id']; ?>)">Löschen</button>
-                            <?php else: ?>
-                                <span class="badge badge-success">Aktueller Benutzer</span>
-                            <?php endif; ?>
-                        </td>
-                    </tr>
+    <?php
+    // Get all permissions grouped by category
+    $stmt = $db->query("SELECT * FROM permissions ORDER BY category, display_name");
+    $all_permissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Group by category
+    $permissions_by_category = [];
+    foreach ($all_permissions as $perm) {
+        $cat = $perm['category'] ?? 'Sonstige';
+        if (!isset($permissions_by_category[$cat])) {
+            $permissions_by_category[$cat] = [];
+        }
+        $permissions_by_category[$cat][] = $perm;
+    }
+    
+    // Reload users with is_admin column
+    $stmt = $db->query("SELECT id, username, first_name, last_name, is_admin, last_login FROM users WHERE active = 1 ORDER BY username");
+    $all_users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    foreach ($all_users as $user):
+        // Get user's current permissions
+        $stmt = $db->prepare("
+            SELECT p.id, p.name, p.display_name, p.category
+            FROM user_permissions up
+            INNER JOIN permissions p ON up.permission_id = p.id
+            WHERE up.user_id = ?
+            ORDER BY p.category, p.display_name
+        ");
+        $stmt->execute([$user['id']]);
+        $user_permissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $user_perm_ids = array_column($user_permissions, 'id');
+    ?>
+    
+    <div class="card" style="margin-bottom: 25px; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: #fff;">
+        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+            <div>
+                <h3 style="margin: 0 0 5px 0;">
+                    <?php echo htmlspecialchars($user['first_name'] . ' ' . $user['last_name']); ?>
+                </h3>
+                <div style="color: #666; font-size: 14px;">
+                    <span>@<?php echo htmlspecialchars($user['username']); ?></span> • 
+                    <span><?php echo htmlspecialchars($user['email']); ?></span> 
+                    <?php if ($user['is_admin']): ?>
+                        • <span class="badge badge-danger">Admin</span>
+                    <?php endif; ?>
+                    <?php if ($user['last_login']): ?>
+                        • <span style="color: #999;">Letzter Login: <?php echo format_datetime($user['last_login']); ?></span>
+                    <?php endif; ?>
+                </div>
+            </div>
+            <div>
+                <?php if ($user['id'] != $_SESSION['user_id']): ?>
+                    <button class="btn btn-sm btn-danger" onclick="deleteUser(<?php echo $user['id']; ?>)">Löschen</button>
+                <?php else: ?>
+                    <span class="badge badge-success">Aktueller Benutzer</span>
+                <?php endif; ?>
+            </div>
+        </div>
+        
+        <?php if ($user['is_admin']): ?>
+            <p style="color: #4caf50; margin: 10px 0; padding: 10px; background: #f1f8f4; border-radius: 4px;">
+                ✓ Admin hat automatisch alle Berechtigungen
+            </p>
+        <?php else: ?>
+            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee;">
+                <strong style="display: block; margin-bottom: 12px; color: #333;">Berechtigungen:</strong>
+                <?php foreach ($permissions_by_category as $category => $perms): ?>
+                    <div style="margin-bottom: 15px;">
+                        <span style="display: inline-block; font-weight: 600; margin-bottom: 6px; color: #555; font-size: 13px;"><?php echo htmlspecialchars($category); ?></span>
+                        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                            <?php foreach ($perms as $perm): 
+                                $has_permission = in_array($perm['id'], $user_perm_ids);
+                            ?>
+                                <form method="POST" style="display: inline;">
+                                    <input type="hidden" name="section" value="permissions">
+                                    <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
+                                    <input type="hidden" name="permission_id" value="<?php echo $perm['id']; ?>">
+                                    <input type="hidden" name="action" value="<?php echo $has_permission ? 'revoke' : 'grant'; ?>">
+                                    <button type="submit" class="btn <?php echo $has_permission ? 'btn-success' : 'btn-outline'; ?>" 
+                                            style="font-size: 12px; padding: 5px 10px; <?php echo !$has_permission ? 'background: #f5f5f5; color: #333; border: 2px solid #ddd;' : ''; ?>">
+                                        <?php echo $has_permission ? '✓ ' : ''; ?><?php echo htmlspecialchars($perm['display_name']); ?>
+                                    </button>
+                                </form>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
                 <?php endforeach; ?>
-            </tbody>
-        </table>
+            </div>
+        <?php endif; ?>
     </div>
+    
+    <?php endforeach; ?>
     
     <h3>Neuen Benutzer hinzufügen</h3>
     <form method="POST" class="user-form">
@@ -348,13 +545,10 @@ include 'includes/header.php';
                 <input type="password" name="password" required>
             </div>
             <div class="form-group">
-                <label>Rolle *</label>
-                <select name="role" required>
-                    <option value="pr_manager">PR Manager</option>
-                    <option value="event_manager">Event Manager</option>
-                    <option value="board">Vorstand</option>
-                    <option value="admin">Admin</option>
-                </select>
+                <label>
+                    <input type="checkbox" name="is_admin" value="1">
+                    Admin-Berechtigungen
+                </label>
             </div>
         </div>
         
@@ -362,20 +556,25 @@ include 'includes/header.php';
     </form>
 </div>
 
+
+
 <script>
 function showTab(tab) {
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
     
-    if (tab === 'social') {
-        document.getElementById('social-tab').classList.add('active');
+    if (tab === 'email') {
+        document.getElementById('email-tab').classList.add('active');
         document.querySelectorAll('.tab-btn')[0].classList.add('active');
+    } else if (tab === 'social') {
+        document.getElementById('social-tab').classList.add('active');
+        document.querySelectorAll('.tab-btn')[1].classList.add('active');
     } else if (tab === 'categories') {
         document.getElementById('categories-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[1].classList.add('active');
-    } else {
-        document.getElementById('users-tab').classList.add('active');
         document.querySelectorAll('.tab-btn')[2].classList.add('active');
+    } else if (tab === 'users') {
+        document.getElementById('users-tab').classList.add('active');
+        document.querySelectorAll('.tab-btn')[3].classList.add('active');
     }
 }
 

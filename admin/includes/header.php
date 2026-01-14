@@ -14,7 +14,7 @@
             <div class="sidebar-header">
                 <h2>Admin</h2>
                 <p><?php echo $_SESSION['user_name'] ?? $_SESSION['username']; ?></p>
-                <span class="user-role"><?php echo $_SESSION['user_role']; ?></span>
+                <span class="user-role"><?php echo $_SESSION['is_admin'] ? 'Admin' : 'Benutzer'; ?></span>
             </div>
             
             <nav class="sidebar-nav">
@@ -74,7 +74,10 @@
                 <a href="messages.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'messages.php' ? 'active' : ''; ?>">
                     <i class="fas fa-envelope"></i> Nachrichten
                 </a>
-                <a href="settings.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'settings.php' ? 'active' : ''; ?>">
+                <a href="approve_registrations.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'approve_registrations.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-user-plus"></i> Registrierungen
+                </a>
+                <a href="settings.php" class="nav-item <?php echo (basename($_SERVER['PHP_SELF']) == 'settings.php' || basename($_SERVER['PHP_SELF']) == 'email_settings.php') ? 'active' : ''; ?>">
                     <i class="fas fa-cog"></i> Einstellungen
                 </a>
                 <?php endif; ?>

@@ -30,6 +30,8 @@
                     <li><a href="board.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'board.php' ? 'active' : ''; ?>">Kommando</a></li>
                     <li><a href="contact.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'contact.php' ? 'active' : ''; ?>">Kontakt</a></li>
                     <li><a href="impressum.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'impressum.php' ? 'active' : ''; ?>">Impressum</a></li>
+                    <li><a href="request_magiclink.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'request_magiclink.php' ? 'active' : ''; ?>">Anmelden</a></li>
+                    <li><a href="register.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'register.php' ? 'active' : ''; ?>">Registrieren</a></li>
                     <li><a href="admin/login.php" class="admin-link" title="Admin-Bereich"><i class="fas fa-user-shield"></i></a></li>
                 </ul>
             </div>

@@ -198,6 +198,52 @@ Verfügbare Rollen: `admin`, `board`, `pr_manager`, `event_manager`
    - `upcoming` = Datum liegt in der Zukunft
    - `past` = Datum liegt in der Vergangenheit
 
+## Magic Link Authentifizierung (Passwortlos)
+
+Mit der Magic Link Authentifizierung melden sich Nutzer ohne Passwort an. Sie erhalten einen einmaligen, zeitlich begrenzten Link per E-Mail.
+
+### Einrichtung
+
+1. Datenbankmigration ausführen:
+
+```bash
+mysql -u <USER> -p <DB_NAME> < OwMM/database/migration_magiclink_auth.sql
+```
+
+2. SMTP konfigurieren:
+    - Öffnen Sie den Admin-Bereich → E-Mail-Einstellungen: [admin/email_settings.php](admin/email_settings.php)
+    - Tragen Sie `SMTP Host`, `Port`, `Benutzername`, `Passwort`, `Absender E-Mail` und `Name` ein
+    - Senden Sie eine Test-E-Mail, um die Konfiguration zu prüfen
+
+### Ablauf für Nutzer
+
+- Registrierung: [register.php](register.php)
+   - Formular ausfüllen (Vorname, Nachname, E-Mail)
+   - E-Mail-Adresse via Link bestätigen: [verify_registration.php](verify_registration.php)
+   - Admin prüft und genehmigt: [admin/approve_registrations.php](admin/approve_registrations.php)
+
+- Anmeldung per Magic Link: [request_magiclink.php](request_magiclink.php)
+   - E-Mail eingeben → Link wird versendet (gültig 15 Minuten, einmalig)
+   - Klick auf den Link → automatische Anmeldung: [verify_magiclink.php](verify_magiclink.php)
+
+### Sicherheit
+
+- Token: 64-stellig, sicher generiert (`random_bytes`), 15 Minuten gültig
+- Einmalige Verwendung (wird beim Login sofort als benutzt markiert)
+- Rate Limiting: max. 3 Anfragen pro 15 Minuten pro E-Mail/IP
+- Audit Trail: Anmeldeversuche werden in `login_attempts` geloggt
+
+### Admin-Menü
+
+- Registrierungen: [admin/approve_registrations.php](admin/approve_registrations.php)
+- E-Mail-Einstellungen: [admin/email_settings.php](admin/email_settings.php)
+- Admin-Login Seite zeigt zusätzlich Option „Mit Magic Link anmelden“
+
+### Hinweise
+
+- Der `users.auth_method` steuert, ob Magic Link erlaubt ist (`magic_link` oder `both`).
+- Für bestehende Konten ohne Passwort kann `password` auf NULL gesetzt werden.
+
 ### Vorstandschaft pflegen
 
 1. Anmeldung als **Board** oder **Admin**

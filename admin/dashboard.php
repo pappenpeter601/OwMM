@@ -10,7 +10,20 @@ if (!is_logged_in()) {
 
 $page_title = 'Dashboard';
 include 'includes/header.php';
+
+// Check if user has any permissions
+$has_any_permission = is_admin() || can_edit_cash() || can_edit_operations() || can_edit_events() || can_edit_page_content() || can_check_transactions();
 ?>
+
+<?php if (!$has_any_permission): ?>
+<div class="quick-stats">
+    <h2>Willkommen, <?php echo htmlspecialchars($_SESSION['first_name']); ?>!</h2>
+    <div class="alert alert-info" style="margin: 20px 0;">
+        <p style="margin: 0;">Sie sind erfolgreich angemeldet. Momentan sind Ihnen noch keine Berechtigungen zugewiesen.</p>
+        <p style="margin: 10px 0 0 0;">Bitte wenden Sie sich an einen Administrator, um Zugriff auf bestimmte Bereiche zu erhalten.</p>
+    </div>
+</div>
+<?php endif; ?>
 
 <?php if (can_edit_cash() || has_role('admin')): ?>
 <div class="quick-stats">
@@ -107,6 +120,14 @@ include 'includes/header.php';
                     <div class="stat-label" style="font-weight: bold;">Neue Nachrichten</div>
                     <div class="stat-number" style="color: ' . ($msg_count > 0 ? '#ff9800' : '#4caf50') . '">' . $msg_count . '</div>
                   </div>';
+            
+            // Open registration requests count
+            $stmt = $db->query("SELECT COUNT(*) as count FROM registration_requests WHERE status = 'pending' AND email_verified_at IS NOT NULL");
+            $reg_count = $stmt->fetch()['count'];
+            echo '<div class="stat-box">
+                    <div class="stat-label" style="font-weight: bold;">Offene Registrierungen</div>
+                    <div class="stat-number" style="color: ' . ($reg_count > 0 ? '#ff9800' : '#4caf50') . '">' . $reg_count . '</div>
+                  </div>';
         }
         ?>
     </div>
@@ -120,6 +141,7 @@ include 'includes/header.php';
         <h3>Einsätze</h3>
         <p>Einsätze verwalten und neue hinzufügen</p>
         <a href="operations.php" class="btn btn-primary">Verwalten</a>
+        <span class="card-tech-info" title="Required Page: operations.php"><i class="fas fa-info-circle"></i> operations.php</span>
     </div>
     <?php endif; ?>
     
@@ -129,6 +151,7 @@ include 'includes/header.php';
         <h3>Veranstaltungen</h3>
         <p>Events und Termine verwalten</p>
         <a href="events.php" class="btn btn-primary">Verwalten</a>
+        <span class="card-tech-info" title="Required Page: events.php"><i class="fas fa-info-circle"></i> events.php</span>
     </div>
     <?php endif; ?>
     
@@ -138,6 +161,7 @@ include 'includes/header.php';
         <h3>Seiteninhalte</h3>
         <p>Startseite und allgemeine Inhalte bearbeiten</p>
         <a href="content.php" class="btn btn-primary">Bearbeiten</a>
+        <span class="card-tech-info" title="Required Page: content.php"><i class="fas fa-info-circle"></i> content.php</span>
     </div>
     
     <div class="dashboard-card">
@@ -145,6 +169,7 @@ include 'includes/header.php';
         <h3>Kommando</h3>
         <p>Kommandomitglieder verwalten</p>
         <a href="board.php" class="btn btn-primary">Verwalten</a>
+        <span class="card-tech-info" title="Required Page: board.php"><i class="fas fa-info-circle"></i> board.php</span>
     </div>
     <?php endif; ?>
     
@@ -154,6 +179,7 @@ include 'includes/header.php';
         <h3>Kontaktanfragen</h3>
         <p>Eingegangene Nachrichten ansehen</p>
         <a href="messages.php" class="btn btn-primary">Ansehen</a>
+        <span class="card-tech-info" title="Required Page: messages.php"><i class="fas fa-info-circle"></i> messages.php</span>
     </div>
 
     <div class="dashboard-card">
@@ -161,6 +187,15 @@ include 'includes/header.php';
         <h3>Kassenprüfer</h3>
         <p>Prüferrollen zuweisen und verwalten</p>
         <a href="kassenpruefer_assignments.php" class="btn btn-primary">Verwalten</a>
+        <span class="card-tech-info" title="Required Page: kassenpruefer_assignments.php"><i class="fas fa-info-circle"></i> kassenpruefer_assignments.php</span>
+    </div>
+    
+    <div class="dashboard-card">
+        <div class="card-icon">👤</div>
+        <h3>Registrierungen</h3>
+        <p>Neue Benutzerregistrierungen genehmigen</p>
+        <a href="approve_registrations.php" class="btn btn-primary">Verwalten</a>
+        <span class="card-tech-info" title="Required Page: approve_registrations.php"><i class="fas fa-info-circle"></i> approve_registrations.php</span>
     </div>
     
     <div class="dashboard-card">
@@ -168,6 +203,7 @@ include 'includes/header.php';
         <h3>Einstellungen</h3>
         <p>System- und Benutzereinstellungen</p>
         <a href="settings.php" class="btn btn-primary">Öffnen</a>
+        <span class="card-tech-info" title="Required Page: settings.php"><i class="fas fa-info-circle"></i> settings.php</span>
     </div>
     <?php endif; ?>
     
@@ -177,6 +213,7 @@ include 'includes/header.php';
         <h3>Kontoführung</h3>
         <p>Kassenprüfung und Transaktionsverwaltung</p>
         <a href="kontofuehrung.php" class="btn btn-primary">Öffnen</a>
+        <span class="card-tech-info" title="Required Page: kontofuehrung.php"><i class="fas fa-info-circle"></i> kontofuehrung.php</span>
     </div>
     
     <div class="dashboard-card">
@@ -184,6 +221,7 @@ include 'includes/header.php';
         <h3>Mitglieder</h3>
         <p>Mitgliederverwaltung und Beiträge</p>
         <a href="members.php" class="btn btn-primary">Verwalten</a>
+        <span class="card-tech-info" title="Required Page: members.php"><i class="fas fa-info-circle"></i> members.php</span>
     </div>
     
     <div class="dashboard-card">
@@ -191,6 +229,7 @@ include 'includes/header.php';
         <h3>Beitragsforderungen</h3>
         <p>Jahresbeiträge generieren und verwalten</p>
         <a href="generate_obligations.php" class="btn btn-primary">Verwalten</a>
+        <span class="card-tech-info" title="Required Page: generate_obligations.php"><i class="fas fa-info-circle"></i> generate_obligations.php</span>
     </div>
     
     <div class="dashboard-card">
@@ -198,6 +237,7 @@ include 'includes/header.php';
         <h3>Artikel</h3>
         <p>Artikel und Gegenstände verwalten</p>
         <a href="items.php" class="btn btn-primary">Verwalten</a>
+        <span class="card-tech-info" title="Required Page: items.php"><i class="fas fa-info-circle"></i> items.php</span>
     </div>
     
     <div class="dashboard-card">
@@ -205,6 +245,17 @@ include 'includes/header.php';
         <h3>Artikelverpflichtungen</h3>
         <p>Artikel-Verpflichtungen erstellen und verwalten</p>
         <a href="outstanding_obligations.php" class="btn btn-primary">Verwalten</a>
+        <span class="card-tech-info" title="Required Page: outstanding_obligations.php"><i class="fas fa-info-circle"></i> outstanding_obligations.php</span>
+    </div>
+    <?php endif; ?>
+    
+    <?php if (can_check_transactions()): ?>
+    <div class="dashboard-card">
+        <div class="card-icon">✅</div>
+        <h3>Prüfperioden</h3>
+        <p>Kassenprüfung nach Perioden durchführen</p>
+        <a href="check_periods.php" class="btn btn-primary">Verwalten</a>
+        <span class="card-tech-info" title="Required Page: check_periods.php"><i class="fas fa-info-circle"></i> check_periods.php</span>
     </div>
     <?php endif; ?>
 </div>
