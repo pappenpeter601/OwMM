@@ -11,7 +11,7 @@
 </head>
 <body>
     <header class="site-header">
-        <nav class="navbar">
+        <div class="header-top">
             <div class="container">
                 <div class="nav-brand">
                     <a href="index.php"><?php echo SITE_NAME; ?></a>
@@ -22,11 +22,15 @@
                     <span></span>
                     <span></span>
                 </button>
-                
+            </div>
+        </div>
+        <nav class="navbar">
+            <div class="container">
                 <ul class="nav-menu" id="navMenu">
                     <li><a href="index.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'index.php' ? 'active' : ''; ?>">Start</a></li>
                     <li><a href="operations.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'operations.php' ? 'active' : ''; ?>">Einsätze</a></li>
                     <li><a href="events.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'events.php' ? 'active' : ''; ?>">Veranstaltungen</a></li>
+                    <li><a href="trucks.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'trucks.php' ? 'active' : ''; ?>">Fahrzeuge</a></li>
                     <li><a href="board.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'board.php' ? 'active' : ''; ?>">Kommando</a></li>
                     <li><a href="contact.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'contact.php' ? 'active' : ''; ?>">Kontakt</a></li>
                     <li><a href="impressum.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'impressum.php' ? 'active' : ''; ?>">Impressum</a></li>

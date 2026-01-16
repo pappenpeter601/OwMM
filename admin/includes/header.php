@@ -34,6 +34,12 @@
                 </a>
                 <?php endif; ?>
                 
+                <?php if (has_permission('trucks.php')): ?>
+                <a href="trucks.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'trucks.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-truck"></i> Fahrzeuge
+                </a>
+                <?php endif; ?>
+                
                 <?php if (can_edit_page_content()): ?>
                 <a href="content.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'content.php' ? 'active' : ''; ?>">
                     <i class="fas fa-file-alt"></i> Seiteninhalte

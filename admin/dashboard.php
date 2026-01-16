@@ -15,10 +15,10 @@ include 'includes/header.php';
 $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_permission('members.php') || 
                       has_permission('generate_obligations.php') || has_permission('items.php') || 
                       has_permission('outstanding_obligations.php') || has_permission('operations.php') || 
-                      has_permission('events.php') || has_permission('content.php') || has_permission('board.php') || 
-                      has_permission('messages.php') || has_permission('kassenpruefer_assignments.php') || 
-                      has_permission('approve_registrations.php') || has_permission('settings.php') || 
-                      has_permission('check_periods.php');
+                      has_permission('events.php') || has_permission('trucks.php') || has_permission('content.php') || 
+                      has_permission('board.php') || has_permission('messages.php') || 
+                      has_permission('kassenpruefer_assignments.php') || has_permission('approve_registrations.php') || 
+                      has_permission('settings.php') || has_permission('check_periods.php');
 ?>
 
 <?php if (!$has_any_permission): ?>
@@ -172,6 +172,7 @@ foreach ($all_permissions as $perm) {
 $perm_details = [
     'operations.php' => ['icon' => '📋', 'title' => 'Einsätze', 'desc' => 'Einsätze verwalten und neue hinzufügen', 'url' => 'operations.php'],
     'events.php' => ['icon' => '📅', 'title' => 'Veranstaltungen', 'desc' => 'Events und Termine verwalten', 'url' => 'events.php'],
+    'trucks.php' => ['icon' => '🚒', 'title' => 'Fahrzeuge', 'desc' => 'Feuerwehrfahrzeuge und Ausstattung verwalten', 'url' => 'trucks.php'],
     'content.php' => ['icon' => '📝', 'title' => 'Seiteninhalte', 'desc' => 'Startseite und allgemeine Inhalte bearbeiten', 'url' => 'content.php'],
     'board.php' => ['icon' => '👥', 'title' => 'Kommando', 'desc' => 'Kommandomitglieder verwalten', 'url' => 'board.php'],
     'messages.php' => ['icon' => '💬', 'title' => 'Kontaktanfragen', 'desc' => 'Eingegangene Nachrichten ansehen', 'url' => 'messages.php'],
