@@ -3,11 +3,56 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?php echo $page_title ?? SITE_NAME; ?></title>
-    <meta name="description" content="<?php echo $page_description ?? 'Freiwillige Feuerwehr - Immer für Sie da'; ?>">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    
+    <!-- SEO Meta Tags -->
+    <title><?php echo isset($page_title) ? $page_title . ' | ' . SITE_NAME : SITE_NAME . ' - Freiwillige Feuerwehr Meinern-Mittelstendorf'; ?></title>
+    <meta name="description" content="<?php echo isset($page_description) ? $page_description : 'Freiwillige Feuerwehr Meinern-Mittelstendorf (OWMM) - Einsatzberichte, Übungen, Veranstaltungen und Informationen über unsere Feuerwehr.'; ?>">
+    <meta name="keywords" content="Feuerwehr, Meinern, Mittelstendorf, OWMM, Einsätze, Rettung, Löschzug, Technische Hilfe">
+    <meta name="author" content="Freiwillige Feuerwehr Meinern-Mittelstendorf">
+    <meta name="robots" content="index, follow">
+    <meta name="language" content="de">
+    <meta name="revisit-after" content="7 days">
+    
+    <!-- Open Graph / Social Media -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="<?php echo SITE_URL . $_SERVER['REQUEST_URI']; ?>">
+    <meta property="og:title" content="<?php echo isset($page_title) ? $page_title . ' | ' . SITE_NAME : SITE_NAME; ?>">
+    <meta property="og:description" content="<?php echo isset($page_description) ? $page_description : 'Freiwillige Feuerwehr Meinern-Mittelstendorf - Einsatzberichte, Übungen und Events'; ?>">
+    <meta property="og:locale" content="de_DE">
+    <meta property="og:site_name" content="<?php echo SITE_NAME; ?>">
+    
+    <!-- Canonical URL -->
+    <link rel="canonical" href="<?php echo SITE_URL . strtok($_SERVER['REQUEST_URI'], '?'); ?>">
+    
+    <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    
+    <!-- Stylesheets -->
     <link rel="stylesheet" href="assets/css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    
+    <!-- Structured Data for Search Engines -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "<?php echo SITE_NAME; ?>",
+      "description": "Freiwillige Feuerwehr Meinern-Mittelstendorf",
+      "url": "<?php echo SITE_URL; ?>",
+      "logo": "<?php echo SITE_URL; ?>/favicon.svg",
+      "contactPoint": {
+        "@type": "ContactPoint",
+        "email": "<?php echo ADMIN_EMAIL; ?>",
+        "contactType": "customer service",
+        "availableLanguage": ["German"]
+      },
+      "areaServed": {
+        "@type": "City",
+        "name": "Meinern, Mittelstendorf"
+      }
+    }
+    </script>
 </head>
 <body>
     <header class="site-header">

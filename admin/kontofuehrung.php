@@ -351,7 +351,7 @@ include 'includes/header.php';
                 <input type="date" id="end_date" name="end_date"
                        value="<?php echo $end_date ? $end_date : ''; ?>">
             </div>
-            <div class="form-group">
+            <div class="form-group" style="display: flex; align-items: flex-end; gap: 0.5rem;">
                 <button type="submit" class="btn btn-secondary">Filtern</button>
                 <a href="?" class="btn btn-secondary">Zurücksetzen</a>
             </div>
@@ -368,16 +368,11 @@ include 'includes/header.php';
             <thead>
                 <tr>
                     <th>Datum</th>
-                    <th>Verwendungszweck</th>
-                    <th>Zahler</th>
+                    <th>Verwendungszweck / Zahler</th>
                     <th>Betrag</th>
-                    <th>Kategorie</th>
-                    <th>GJ</th>
-                    <th>Status</th>
-                    <th>Dokumente</th>
-                    <th>Verpflichtungen</th>
+                    <th>Kategorie / GJ / Status</th>
+                    <th>Dokumente / Verpflichtungen</th>
                     <th>Notizen</th>
-                    <th>Aktionen</th>
                 </tr>
             </thead>
             <tbody>
@@ -386,68 +381,85 @@ include 'includes/header.php';
                 ?>
                     <tr class="<?php echo $transaction['amount'] > 0 ? 'income-row' : 'expense-row'; ?> <?php echo $is_locked ? 'locked-row' : ''; ?>">
                         <td class="date"><?php echo date('d.m.Y', strtotime($transaction['booking_date'])); ?></td>
-                        <td class="purpose"><?php echo htmlspecialchars($transaction['purpose'] ?? $transaction['booking_text']); ?></td>
-                        <td class="payer"><?php echo htmlspecialchars($transaction['payer'] ?? ''); ?></td>
+                        <td class="purpose-payer">
+                            <div style="font-weight: 500; margin-bottom: 0.5rem;"><?php echo htmlspecialchars($transaction['purpose'] ?? $transaction['booking_text']); ?></div>
+                            <div style="border-top: 1px solid #ddd; padding-top: 0.5rem; color: #666; font-size: 0.9rem;"><?php echo htmlspecialchars($transaction['payer'] ?? ''); ?></div>
+                        </td>
                         <td class="amount <?php echo $transaction['amount'] > 0 ? 'income' : 'expense'; ?>">
                             <?php echo number_format($transaction['amount'], 2, ',', '.'); ?> €
                         </td>
-                        <td class="category" style="background-color: <?php echo !empty($transaction['cat_color']) ? htmlspecialchars($transaction['cat_color']) . '20' : '#f9f9f9'; ?>; border-left: 4px solid <?php echo !empty($transaction['cat_color']) ? htmlspecialchars($transaction['cat_color']) : '#ccc'; ?>;">
-                            <form method="POST" class="inline-form">
-                                <input type="hidden" name="action" value="update_transaction">
-                                <input type="hidden" name="id" value="<?php echo $transaction['id']; ?>">
-                                <select name="category_id" class="category-select" onchange="this.form.submit()" <?php echo $is_locked ? 'disabled' : ''; ?>>
-                                    <option value="">—</option>
-                                    <?php foreach ($categories as $cat): ?>
-                                        <option value="<?php echo htmlspecialchars($cat['id']); ?>"
-                                                <?php echo $transaction['category_id'] == $cat['id'] ? 'selected' : ''; ?>>
-                                            <?php echo htmlspecialchars($cat['name']); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </form>
+                        <td class="category-gj-status" style="background-color: <?php echo !empty($transaction['cat_color']) ? htmlspecialchars($transaction['cat_color']) . '20' : '#f9f9f9'; ?>; border-left: 4px solid <?php echo !empty($transaction['cat_color']) ? htmlspecialchars($transaction['cat_color']) : '#ccc'; ?>;">
+                            <!-- Kategorie -->
+                            <div style="margin-bottom: 0.75rem;">
+                                <form method="POST" class="inline-form">
+                                    <input type="hidden" name="action" value="update_transaction">
+                                    <input type="hidden" name="id" value="<?php echo $transaction['id']; ?>">
+                                    <select name="category_id" class="category-select" onchange="this.form.submit()" <?php echo $is_locked ? 'disabled' : ''; ?>>
+                                        <option value="">—</option>
+                                        <?php foreach ($categories as $cat): ?>
+                                            <option value="<?php echo htmlspecialchars($cat['id']); ?>"
+                                                    <?php echo $transaction['category_id'] == $cat['id'] ? 'selected' : ''; ?>>
+                                                <?php echo htmlspecialchars($cat['name']); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </form>
+                            </div>
+                            <!-- GJ -->
+                            <div style="margin-bottom: 0.75rem;">
+                                <form method="POST" class="inline-form" onsubmit="return updateBusinessYear(event, <?php echo $transaction['id']; ?>);">
+                                    <input type="hidden" name="action" value="update_transaction">
+                                    <input type="hidden" name="id" value="<?php echo $transaction['id']; ?>">
+                                    <input type="number" name="business_year" value="<?php echo htmlspecialchars($transaction['business_year']); ?>" 
+                                           min="2000" max="2100" style="width: 90px;" onchange="this.form.requestSubmit()" onkeydown="if(event.key==='Enter'){event.preventDefault();}" <?php echo $is_locked ? 'disabled' : ''; ?>>
+                                </form>
+                            </div>
+                            <!-- Status -->
+                            <div>
+                                <?php if ($is_locked): ?>
+                                    <span class="badge badge-locked" title="Transaktion ist finalisiert und gesperrt">🔒 Gesperrt</span>
+                                <?php elseif ($transaction['check_status'] === 'checked'): ?>
+                                    <span class="badge badge-checked" title="Transaktion wurde geprüft">✓ Geprüft</span>
+                                <?php elseif ($transaction['check_status'] === 'under_investigation'): ?>
+                                    <span class="badge badge-investigation" title="Transaktion wird geprüft">⚠️ In Prüfung</span>
+                                <?php else: ?>
+                                    <span class="badge badge-unchecked" title="Transaktion noch nicht geprüft">⏳ Ungeprüft</span>
+                                <?php endif; ?>
+                            </div>
                         </td>
-                        <td class="business-year">
-                            <form method="POST" class="inline-form">
-                                <input type="hidden" name="action" value="update_transaction">
-                                <input type="hidden" name="id" value="<?php echo $transaction['id']; ?>">
-                                <input type="number" name="business_year" value="<?php echo htmlspecialchars($transaction['business_year']); ?>" 
-                                       min="2000" max="2100" style="width: 60px;" onchange="this.form.submit()" <?php echo $is_locked ? 'disabled' : ''; ?>>
-                            </form>
-                        </td>
-                        <td class="check-status">
-                            <?php if ($is_locked): ?>
-                                <span class="badge badge-locked" title="Transaktion ist finalisiert und gesperrt">🔒 Gesperrt</span>
-                            <?php elseif ($transaction['check_status'] === 'checked'): ?>
-                                <span class="badge badge-checked" title="Transaktion wurde geprüft">✓ Geprüft</span>
-                            <?php elseif ($transaction['check_status'] === 'under_investigation'): ?>
-                                <span class="badge badge-investigation" title="Transaktion wird geprüft">⚠️ In Prüfung</span>
+                        <td class="docs-obligations">
+                            <?php $is_income = $transaction['amount'] > 0; ?>
+                            <?php if ($is_income): ?>
+                                <!-- Show Obligations for income -->
+                                <?php 
+                                $stmt = $db->prepare("SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total_linked FROM member_payments WHERE transaction_id = :id");
+                                $stmt->execute([':id' => $transaction['id']]);
+                                $linkInfo = $stmt->fetch();
+                                $count = $linkInfo['count'];
+                                $linked_total_overview = $linkInfo['total_linked'];
+                                $remaining_overview = max(0, $transaction['amount'] - $linked_total_overview);
+                                ?>
+                                <button class="btn btn-sm btn-secondary" 
+                                        onclick="toggleObligations(<?php echo $transaction['id']; ?>)">
+                                    <i class="fas fa-link"></i> 
+                                    <?php echo $count > 0 ? $count : 'Verknüpfen'; ?>
+                                </button>
+                                <div style="font-size: 0.85rem; color: #555; margin-top: 0.25rem;">
+                                    Offen: <?php echo number_format($remaining_overview, 2, ',', '.'); ?> €
+                                </div>
                             <?php else: ?>
-                                <span class="badge badge-unchecked" title="Transaktion noch nicht geprüft">⏳ Ungeprüft</span>
+                                <!-- Show Documents for expenses -->
+                                <button class="btn btn-sm btn-secondary" 
+                                        onclick="toggleDocs(<?php echo $transaction['id']; ?>)">
+                                    <i class="fas fa-file-pdf"></i> 
+                                    <?php 
+                                    $stmt = $db->prepare("SELECT COUNT(*) as count FROM transaction_documents WHERE transaction_id = :id");
+                                    $stmt->execute([':id' => $transaction['id']]);
+                                    $doc_count = $stmt->fetch()['count'];
+                                    echo $doc_count > 0 ? $doc_count : 'Hochladen';
+                                    ?>
+                                </button>
                             <?php endif; ?>
-                        </td>
-                        <td class="documents">
-                            <button class="btn btn-sm btn-secondary" 
-                                    onclick="toggleDocs(<?php echo $transaction['id']; ?>)">
-                                <i class="fas fa-file-pdf"></i> 
-                                <?php 
-                                $stmt = $db->prepare("SELECT COUNT(*) as count FROM transaction_documents WHERE transaction_id = :id");
-                                $stmt->execute([':id' => $transaction['id']]);
-                                $count = $stmt->fetch()['count'];
-                                echo $count > 0 ? $count : 'Hochladen';
-                                ?>
-                            </button>
-                        </td>
-                        <td class="obligations">
-                            <button class="btn btn-sm btn-secondary" 
-                                    onclick="toggleObligations(<?php echo $transaction['id']; ?>)">
-                                <i class="fas fa-link"></i> 
-                                <?php 
-                                $stmt = $db->prepare("SELECT COUNT(*) as count FROM member_payments WHERE transaction_id = :id");
-                                $stmt->execute([':id' => $transaction['id']]);
-                                $count = $stmt->fetch()['count'];
-                                echo $count > 0 ? $count : 'Verknüpfen';
-                                ?>
-                            </button>
                         </td>
                         <td class="notes">
                             <form method="POST" class="inline-form">
@@ -456,16 +468,11 @@ include 'includes/header.php';
                                 <textarea name="comment" placeholder="Notiz..." class="note-input" onchange="this.form.submit()" rows="2"><?php echo htmlspecialchars($transaction['comment'] ?? ''); ?></textarea>
                             </form>
                         </td>
-                        <td class="actions">
-                            <button class="btn btn-sm btn-info" onclick="toggleDocs(<?php echo $transaction['id']; ?>); toggleObligations(<?php echo $transaction['id']; ?>);" title="Alle Details anzeigen/verbergen">
-                                <i class="fas fa-ellipsis-v"></i>
-                            </button>
-                        </td>
                     </tr>
                     
                     <!-- Documents Row (hidden by default) -->
                     <tr id="docs-<?php echo $transaction['id']; ?>" class="documents-row" style="display: none;">
-                        <td colspan="10">
+                        <td colspan="9">
                             <div class="documents-panel">
                                 <?php 
                                 $stmt = $db->prepare("SELECT * FROM transaction_documents WHERE transaction_id = :id ORDER BY uploaded_at DESC");
@@ -517,7 +524,7 @@ include 'includes/header.php';
                     
                     <!-- Obligations Row (hidden by default) -->
                     <tr id="obls-<?php echo $transaction['id']; ?>" class="obligations-row" style="display: none;">
-                        <td colspan="10">
+                        <td colspan="9" data-transaction-id="<?php echo $transaction['id']; ?>">
                             <div class="obligations-panel" style="padding: 1.5rem; overflow-x: auto;">
                                 <?php 
                                 // Get all open/partial obligations for search
@@ -574,7 +581,7 @@ include 'includes/header.php';
                                     
                                     <div class="link-obligation" style="margin-top: 1rem;">
                                         <h4>Beitragsverpflichtung verknüpfen</h4>
-                                        <form method="POST" class="link-form" id="link-form-<?php echo $transaction['id']; ?>">
+                                        <form method="POST" class="link-form" id="link-form-<?php echo $transaction['id']; ?>" onsubmit="handleLinkObligation(event, <?php echo $transaction['id']; ?>)">
                                             <input type="hidden" name="action" value="link_obligation">
                                             <input type="hidden" name="transaction_id" value="<?php echo $transaction['id']; ?>">
                                             <input type="hidden" name="obligation_id" id="selected-obl-<?php echo $transaction['id']; ?>" required>
@@ -602,6 +609,20 @@ include 'includes/header.php';
                                                         <script type="application/json" id="obligations-data-<?php echo $transaction['id']; ?>">
                                                             <?php echo json_encode($all_obligations); ?>
                                                         </script>
+                                                        <script type="application/json" id="transaction-data-<?php echo $transaction['id']; ?>">
+                                                            <?php 
+                                                            // Calculate total already linked to this transaction
+                                                            $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_linked 
+                                                                                 FROM member_payments 
+                                                                                 WHERE transaction_id = :id");
+                                                            $stmt->execute([':id' => $transaction['id']]);
+                                                            $linked_total = $stmt->fetch()['total_linked'];
+                                                            echo json_encode([
+                                                                'amount' => $transaction['amount'],
+                                                                'linked_total' => $linked_total
+                                                            ]); 
+                                                            ?>
+                                                        </script>
                                                     </div>
                                                 </div>
                                                 <div class="form-group" style="flex: 0 0 120px;">
@@ -611,7 +632,24 @@ include 'includes/header.php';
                                                            id="amount-<?php echo $transaction['id']; ?>"
                                                            step="0.01" 
                                                            required 
-                                                           style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                                                           style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;"
+                                                           title="Wird automatisch auf Transaktionsbetrag minus bereits verknüpfte Beträge gesetzt">
+                                                    <?php 
+                                                    // Calculate remaining amount info for display
+                                                    $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_linked 
+                                                                         FROM member_payments 
+                                                                         WHERE transaction_id = :id");
+                                                    $stmt->execute([':id' => $transaction['id']]);
+                                                    $current_linked = $stmt->fetch()['total_linked'];
+                                                    $remaining = abs($transaction['amount']) - $current_linked;
+                                                    ?>
+                                                    <small id="remaining-<?php echo $transaction['id']; ?>" style="display: block; color: #666; margin-top: 2px;">
+                                                        <?php if ($current_linked > 0): ?>
+                                                            Verfügbar: <?php echo number_format($remaining, 2, ',', '.'); ?> €
+                                                        <?php else: ?>
+                                                            Transaktion: <?php echo number_format(abs($transaction['amount']), 2, ',', '.'); ?> €
+                                                        <?php endif; ?>
+                                                    </small>
                                                 </div>
                                                 <div class="form-group" style="flex: 0 0 140px;">
                                                     <label>Datum</label>
@@ -711,6 +749,16 @@ include 'includes/header.php';
     font-size: 0.9rem;
 }
 
+.transactions-table th.category-gj-status, .transactions-table td.category-gj-status {
+    width: 480px;
+    vertical-align: middle;
+    padding: 0.75rem !important;
+}
+
+.transactions-table th.notes, .transactions-table td.notes {
+    min-width: 260px;
+}
+
 .transactions-table tbody tr.income-row {
     background-color: #f0f8f0;
 }
@@ -735,23 +783,10 @@ include 'includes/header.php';
     border-radius: 4px;
     font-size: 0.9rem;
     width: 100%;
-    min-width: 150px;
-}
-
-.note-input {
-    padding: 0.75rem;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    font-size: 0.9rem;
-    width: 100%;
-    min-width: 250px;
-    min-height: 50px;
-    font-family: inherit;
-    resize: vertical;
 }
 
 .inline-form {
-    display: inline;
+    display: block;
 }
 
 .documents-row td {
@@ -950,10 +985,37 @@ function clearSelection(transactionId) {
     document.getElementById('amount-' + transactionId).value = '';
     document.getElementById('selected-display-' + transactionId).style.display = 'none';
     document.getElementById('member-search-' + transactionId).style.display = 'block';
+    document.getElementById('member-search-' + transactionId).focus();
 }
 
-// Real-time search for obligations
+function updateTransactionData(transactionId) {
+    // Refresh the transaction data from the DOM
+    const transactionDataEl = document.getElementById('transaction-data-' + transactionId);
+    if (transactionDataEl) {
+        const transactionData = JSON.parse(transactionDataEl.textContent);
+        const remaining = Math.abs(transactionData.amount) - transactionData.linked_total;
+        const remainingEl = document.getElementById('remaining-' + transactionId);
+        if (remainingEl && remaining > 0) {
+            remainingEl.textContent = 'Verfügbar: ' + remaining.toFixed(2).replace('.', ',') + ' €';
+        }
+    }
+}
+
+// Real-time search for obligations + re-open last section
 document.addEventListener('DOMContentLoaded', function() {
+    const openSectionId = sessionStorage.getItem('openObligationSection');
+    if (openSectionId) {
+        const row = document.getElementById('obls-' + openSectionId);
+        if (row) {
+            row.style.display = 'table-row';
+        }
+        const searchField = document.getElementById('member-search-' + openSectionId);
+        if (searchField) {
+            searchField.focus();
+        }
+        sessionStorage.removeItem('openObligationSection');
+    }
+
     // Setup search for each transaction
     document.querySelectorAll('[id^="member-search-"]').forEach(function(input) {
         const transactionId = input.id.replace('member-search-', '');
@@ -1016,15 +1078,138 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     });
+
+    // Validate amount vs remaining for each transaction on input changes
+    document.querySelectorAll('[id^="amount-"]').forEach(function(amountInput) {
+        const transactionId = amountInput.id.replace('amount-', '');
+        amountInput.addEventListener('input', function() {
+            updateLinkButtonState(transactionId);
+        });
+    });
+
+    // Initial state update
+    document.querySelectorAll('[id^="amount-"]').forEach(function(amountInput) {
+        const transactionId = amountInput.id.replace('amount-', '');
+        updateLinkButtonState(transactionId);
+    });
 });
 
 function selectObligation(transactionId, obligationId, displayText, amount) {
     document.getElementById('selected-obl-' + transactionId).value = obligationId;
     document.getElementById('selected-text-' + transactionId).textContent = displayText;
-    document.getElementById('amount-' + transactionId).value = amount.toFixed(2);
+    const remaining = getRemaining(transactionId);
+    const clampedAmount = Math.min(amount, remaining);
+    document.getElementById('amount-' + transactionId).value = clampedAmount.toFixed(2);
     document.getElementById('selected-display-' + transactionId).style.display = 'block';
     document.getElementById('member-search-' + transactionId).style.display = 'none';
     document.getElementById('search-results-' + transactionId).style.display = 'none';
+    updateLinkButtonState(transactionId);
+}
+
+function getRemaining(transactionId) {
+    const dataEl = document.getElementById('transaction-data-' + transactionId);
+    if (!dataEl) return 0;
+    const data = JSON.parse(dataEl.textContent);
+    const amount = parseFloat(data.amount);
+    if (amount <= 0) return 0;
+    return Math.max(0, Math.abs(amount) - parseFloat(data.linked_total));
+}
+
+function updateLinkButtonState(transactionId) {
+    const remaining = getRemaining(transactionId);
+    const amountInput = document.getElementById('amount-' + transactionId);
+    const form = document.getElementById('link-form-' + transactionId);
+    const submitBtn = form ? form.querySelector('button[type="submit"]') : null;
+    const remainingEl = document.getElementById('remaining-' + transactionId);
+    const amount = parseFloat(amountInput.value || '0');
+
+    if (remainingEl) {
+        if (remaining > 0) {
+            remainingEl.textContent = 'Verfügbar: ' + remaining.toFixed(2).replace('.', ',') + ' €' + (amount > remaining ? ' (Betrag zu hoch)' : '');
+        } else {
+            remainingEl.textContent = 'Alle Beträge verknüpft';
+        }
+    }
+
+    if (submitBtn) {
+        submitBtn.disabled = amount > remaining || remaining <= 0;
+    }
+}
+
+function updateBusinessYear(event, transactionId) {
+    event.preventDefault();
+    const form = event.target;
+    const input = form.querySelector('input[name="business_year"]');
+    const originalBorder = input.style.borderColor;
+    const formData = new FormData(form);
+    formData.set('action', 'update_transaction');
+    sessionStorage.setItem('kontofuehrungScrollPos', window.scrollY);
+
+    input.disabled = true;
+    input.style.borderColor = '#999';
+
+    fetch(window.location.pathname + window.location.search, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Server returned ' + response.status);
+        }
+        return response.text();
+    })
+    .then(() => {
+        input.style.borderColor = '#4caf50';
+        setTimeout(() => {
+            input.style.borderColor = originalBorder;
+        }, 800);
+    })
+    .catch(error => {
+        console.error('Error updating business year:', error);
+        alert('Speichern fehlgeschlagen: ' + error.message);
+    })
+    .finally(() => {
+        input.disabled = false;
+    });
+
+    return false;
+}
+
+function handleLinkObligation(event, transactionId) {
+    event.preventDefault();
+
+    const form = document.getElementById('link-form-' + transactionId);
+    const formData = new FormData(form);
+
+    const submitBtn = form.querySelector('button[type="submit"]');
+    const originalText = submitBtn.innerHTML;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Wird verknüpft...';
+
+    // Remember which section was open
+    sessionStorage.setItem('openObligationSection', transactionId);
+
+    fetch(window.location.pathname + window.location.search, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Server returned ' + response.status);
+        }
+        return response.text();
+    })
+    .then(() => {
+        // Reload via GET to avoid Firefox POST-resubmission warning
+        window.location = window.location.pathname + window.location.search;
+    })
+    .catch(error => {
+        console.error('Error in handleLinkObligation:', error);
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalText;
+        alert('Fehler beim Verknüpfen: ' + error.message);
+        sessionStorage.removeItem('openObligationSection');
+    });
 }
 </script>
 
@@ -1148,5 +1333,30 @@ function selectObligation(transactionId, obligationId, displayText, amount) {
     opacity: 0.6;
 }
 </style>
+
+<script>
+// Save scroll position before form submit and restore after page load
+document.addEventListener('DOMContentLoaded', function() {
+    const savedScrollPos = sessionStorage.getItem('kontofuehrungScrollPos');
+    if (savedScrollPos) {
+        window.scrollTo(0, parseInt(savedScrollPos));
+        sessionStorage.removeItem('kontofuehrungScrollPos');
+    }
+    
+    const forms = document.querySelectorAll('form');
+    forms.forEach(form => {
+        form.addEventListener('submit', function() {
+            sessionStorage.setItem('kontofuehrungScrollPos', window.scrollY);
+        });
+    });
+    
+    const autoSubmitElements = document.querySelectorAll('select[onchange*="submit"], textarea[onchange*="submit"]');
+    autoSubmitElements.forEach(element => {
+        element.addEventListener('change', function() {
+            sessionStorage.setItem('kontofuehrungScrollPos', window.scrollY);
+        });
+    });
+});
+</script>
 
 <?php include 'includes/footer.php'; ?>

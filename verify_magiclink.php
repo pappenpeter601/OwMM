@@ -62,8 +62,7 @@ if (empty($token)) {
             $_SERVER['HTTP_USER_AGENT'] ?? ''
         ]);
         
-        // Create session
-        session_start();
+        // Set session variables (session already started in config.php)
         $_SESSION['user_id'] = $magic_link['user_id'];
         $_SESSION['username'] = $magic_link['email'];
         $_SESSION['user_name'] = $magic_link['first_name'] . ' ' . $magic_link['last_name'];
