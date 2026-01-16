@@ -10,6 +10,11 @@ $page_description = 'Freiwillige Feuerwehr - Wir sind für Sie da';
 $hero_content = get_page_content('hero_welcome');
 $about_content = get_page_content('about');
 
+// Get gallery images
+$db = getDBConnection();
+$stmt = $db->query("SELECT * FROM gallery_images WHERE is_active = 1 ORDER BY sort_order ASC, created_at DESC");
+$gallery_images = $stmt->fetchAll();
+
 // Get latest operations
 $latest_operations = get_operations(3);
 
@@ -54,52 +59,220 @@ include 'includes/header.php';
     </div>
 </section>
 
-<!-- Latest Operations -->
-<?php if (!empty($latest_operations)): ?>
-<section class="section operations-section">
+<!-- Gallery Carousel -->
+<?php if (!empty($gallery_images)): ?>
+<section class="section gallery-section">
     <div class="container">
         <div class="section-header">
-            <h2>Aktuelle Einsätze</h2>
-            <a href="operations.php" class="btn btn-outline">Alle Einsätze</a>
+            <h2>Bildergalerie</h2>
         </div>
         
-        <div class="operations-grid">
-            <?php foreach ($latest_operations as $operation): ?>
-                <div class="operation-card">
-                    <?php
-                    $images = get_operation_images($operation['id']);
-                    if (!empty($images)):
-                    ?>
-                        <div class="card-image">
-                            <img src="uploads/<?php echo htmlspecialchars($images[0]['image_url']); ?>" alt="<?php echo htmlspecialchars($operation['title']); ?>">
-                        </div>
-                    <?php endif; ?>
-                    
-                    <div class="card-content">
-                        <div class="card-meta">
-                            <span class="date"><i class="fas fa-calendar"></i> <?php echo format_datetime($operation['operation_date']); ?></span>
-                            <?php if (!empty($operation['location'])): ?>
-                                <span class="location"><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($operation['location']); ?></span>
-                            <?php endif; ?>
-                        </div>
-                        
-                        <h3><?php echo htmlspecialchars($operation['title']); ?></h3>
-                        
-                        <?php if (!empty($operation['operation_type'])): ?>
-                            <div class="operation-type">
-                                <span class="badge"><?php echo htmlspecialchars($operation['operation_type']); ?></span>
+        <div class="gallery-carousel">
+            <div class="carousel-container">
+                <button class="carousel-btn prev" onclick="moveCarousel(-1)">
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+                
+                <div class="carousel-track-container">
+                    <div class="carousel-track">
+                        <?php foreach ($gallery_images as $index => $img): ?>
+                            <div class="carousel-slide <?php echo $index === 0 ? 'active' : ''; ?>">
+                                <img src="uploads/<?php echo htmlspecialchars($img['image_url']); ?>" alt="Gallery image">
+                                <?php if (!empty($img['caption'])): ?>
+                                    <div class="carousel-caption">
+                                        <?php echo htmlspecialchars($img['caption']); ?>
+                                    </div>
+                                <?php endif; ?>
                             </div>
-                        <?php endif; ?>
-                        
-                        <?php if (!empty($operation['description'])): ?>
-                            <p><?php echo htmlspecialchars(mb_substr($operation['description'], 0, 150)); ?>...</p>
-                        <?php endif; ?>
+                        <?php endforeach; ?>
                     </div>
                 </div>
-            <?php endforeach; ?>
+                
+                <button class="carousel-btn next" onclick="moveCarousel(1)">
+                    <i class="fas fa-chevron-right"></i>
+                </button>
+            </div>
+            
+            <div class="carousel-dots">
+                <?php foreach ($gallery_images as $index => $img): ?>
+                    <span class="dot <?php echo $index === 0 ? 'active' : ''; ?>" onclick="goToSlide(<?php echo $index; ?>)"></span>
+                <?php endforeach; ?>
+            </div>
         </div>
     </div>
 </section>
+
+<style>
+.gallery-carousel {
+    max-width: 1000px;
+    margin: 0 auto;
+}
+
+.carousel-container {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.carousel-track-container {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+}
+
+.carousel-track {
+    display: flex;
+    height: 100%;
+    transition: transform 0.5s ease-in-out;
+}
+
+.carousel-slide {
+    min-width: 100%;
+    height: 100%;
+    position: relative;
+    display: none;
+}
+
+.carousel-slide.active {
+    display: block;
+}
+
+.carousel-slide img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.carousel-caption {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
+    color: white;
+    padding: 2rem 1.5rem 1rem;
+    font-size: 1.1rem;
+    text-align: center;
+}
+
+.carousel-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(255,255,255,0.9);
+    border: none;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    color: var(--dark-color);
+    transition: all 0.3s ease;
+    z-index: 10;
+}
+
+.carousel-btn:hover {
+    background: white;
+    transform: translateY(-50%) scale(1.1);
+}
+
+.carousel-btn.prev {
+    left: 1rem;
+}
+
+.carousel-btn.next {
+    right: 1rem;
+}
+
+.carousel-dots {
+    display: flex;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+}
+
+.dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #ccc;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.dot.active {
+    background: var(--primary-color);
+    transform: scale(1.3);
+}
+
+.dot:hover {
+    background: var(--primary-color);
+    opacity: 0.7;
+}
+
+@media (max-width: 768px) {
+    .carousel-btn {
+        width: 40px;
+        height: 40px;
+        font-size: 1rem;
+    }
+    
+    .carousel-btn.prev {
+        left: 0.5rem;
+    }
+    
+    .carousel-btn.next {
+        right: 0.5rem;
+    }
+    
+    .carousel-caption {
+        font-size: 0.95rem;
+        padding: 1.5rem 1rem 0.75rem;
+    }
+}
+</style>
+
+<script>
+let currentSlide = 0;
+const slides = document.querySelectorAll('.carousel-slide');
+const dots = document.querySelectorAll('.dot');
+
+function showSlide(index) {
+    slides.forEach(slide => slide.classList.remove('active'));
+    dots.forEach(dot => dot.classList.remove('active'));
+    
+    if (index >= slides.length) {
+        currentSlide = 0;
+    } else if (index < 0) {
+        currentSlide = slides.length - 1;
+    } else {
+        currentSlide = index;
+    }
+    
+    slides[currentSlide].classList.add('active');
+    dots[currentSlide].classList.add('active');
+}
+
+function moveCarousel(direction) {
+    showSlide(currentSlide + direction);
+}
+
+function goToSlide(index) {
+    showSlide(index);
+}
+
+// Auto-advance carousel every 5 seconds
+setInterval(() => {
+    moveCarousel(1);
+}, 5000);
+</script>
 <?php endif; ?>
 
 <!-- Upcoming Events -->
@@ -139,16 +312,5 @@ include 'includes/header.php';
     </div>
 </section>
 <?php endif; ?>
-
-<!-- Call to Action -->
-<section class="section cta-section">
-    <div class="container">
-        <div class="cta-box">
-            <h2>Haben Sie Fragen oder möchten Sie uns kontaktieren?</h2>
-            <p>Wir freuen uns über Ihre Nachricht und helfen Ihnen gerne weiter.</p>
-            <a href="contact.php" class="btn btn-primary btn-lg">Kontaktformular</a>
-        </div>
-    </div>
-</section>
 
 <?php include 'includes/footer.php'; ?>

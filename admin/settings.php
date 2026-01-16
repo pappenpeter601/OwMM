@@ -209,6 +209,92 @@ $categories = $stmt->fetchAll();
 $stmt = $db->query("SELECT * FROM users ORDER BY created_at DESC");
 $users = $stmt->fetchAll();
 
+// AJAX: return only selected user's detail panel without full page reload
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'user_detail') {
+    $stmt = $db->query("SELECT * FROM permissions ORDER BY category, display_name");
+    $all_permissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $permissions_by_category = [];
+    foreach ($all_permissions as $perm) {
+        $cat = $perm['category'] ?? 'Sonstige';
+        if (!isset($permissions_by_category[$cat])) { $permissions_by_category[$cat] = []; }
+        $permissions_by_category[$cat][] = $perm;
+    }
+
+    $user_id = isset($_GET['user_id']) ? (int)$_GET['user_id'] : 0;
+    $stmt = $db->prepare("SELECT id, username, email, first_name, last_name, is_admin, last_login FROM users WHERE id = ? AND active = 1");
+    $stmt->execute([$user_id]);
+    $selected_user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$selected_user) {
+        echo '<div class="empty-state"><p>Benutzer nicht gefunden.</p></div>';
+        exit;
+    }
+
+    $stmt = $db->prepare(
+        "SELECT p.id, p.name, p.display_name, p.category
+         FROM user_permissions up
+         INNER JOIN permissions p ON up.permission_id = p.id
+         WHERE up.user_id = ?
+         ORDER BY p.category, p.display_name"
+    );
+    $stmt->execute([$selected_user['id']]);
+    $user_permissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $user_perm_ids = array_column($user_permissions, 'id');
+    ?>
+    <div class="card user-detail-card">
+        <div class="user-detail-header">
+            <div class="user-ident">
+                <h3 class="user-name"><?php echo htmlspecialchars($selected_user['first_name'] . ' ' . $selected_user['last_name']); ?></h3>
+                <div class="user-meta">
+                    <span class="user-handle">@<?php echo htmlspecialchars($selected_user['username']); ?></span>
+                    • <span class="user-email"><?php echo htmlspecialchars($selected_user['email']); ?></span>
+                    <?php if ($selected_user['is_admin']): ?>
+                        • <span class="badge badge-danger">Admin</span>
+                    <?php endif; ?>
+                    <?php if ($selected_user['last_login']): ?>
+                        • <span class="user-last-login">Letzter Login: <?php echo format_datetime($selected_user['last_login']); ?></span>
+                    <?php endif; ?>
+                </div>
+            </div>
+            <div class="user-actions">
+                <?php if ($selected_user['id'] != $_SESSION['user_id']): ?>
+                    <button class="btn btn-sm btn-danger" onclick="deleteUser(<?php echo (int)$selected_user['id']; ?>)">Löschen</button>
+                <?php else: ?>
+                    <span class="badge badge-success">Aktueller Benutzer</span>
+                <?php endif; ?>
+            </div>
+        </div>
+
+        <?php if ($selected_user['is_admin']): ?>
+            <p class="admin-info">✓ Admin hat automatisch alle Berechtigungen</p>
+        <?php else: ?>
+            <div class="permissions-section">
+                <strong class="section-title">Berechtigungen</strong>
+                <?php foreach ($permissions_by_category as $category => $perms): ?>
+                    <div class="permission-category">
+                        <span class="category-title"><?php echo htmlspecialchars($category); ?></span>
+                        <div class="permission-list">
+                            <?php foreach ($perms as $perm): $has_permission = in_array($perm['id'], $user_perm_ids); ?>
+                                <form method="POST" class="permission-item">
+                                    <input type="hidden" name="section" value="permissions">
+                                    <input type="hidden" name="user_id" value="<?php echo (int)$selected_user['id']; ?>">
+                                    <input type="hidden" name="permission_id" value="<?php echo (int)$perm['id']; ?>">
+                                    <input type="hidden" name="action" value="<?php echo $has_permission ? 'revoke' : 'grant'; ?>">
+                                    <button type="submit" class="btn <?php echo $has_permission ? 'btn-success' : 'btn-outline'; ?>">
+                                        <?php echo $has_permission ? '✓ ' : ''; ?><?php echo htmlspecialchars($perm['display_name']); ?>
+                                    </button>
+                                </form>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+    </div>
+    <?php
+    exit;
+}
+
 $page_title = 'Einstellungen';
 include 'includes/header.php';
 ?>
@@ -434,126 +520,164 @@ include 'includes/header.php';
         $permissions_by_category[$cat][] = $perm;
     }
     
-    // Reload users with is_admin column
-    $stmt = $db->query("SELECT id, username, first_name, last_name, is_admin, last_login FROM users WHERE active = 1 ORDER BY username");
+    // Reload users with is_admin column (include email for display)
+    $stmt = $db->query("SELECT id, username, email, first_name, last_name, is_admin, last_login FROM users WHERE active = 1 ORDER BY username");
     $all_users = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    foreach ($all_users as $user):
-        // Get user's current permissions
-        $stmt = $db->prepare("
-            SELECT p.id, p.name, p.display_name, p.category
-            FROM user_permissions up
-            INNER JOIN permissions p ON up.permission_id = p.id
-            WHERE up.user_id = ?
-            ORDER BY p.category, p.display_name
-        ");
-        $stmt->execute([$user['id']]);
-        $user_permissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        $user_perm_ids = array_column($user_permissions, 'id');
+
+    // Determine selected user (from URL or default to first)
+    $selected_user_id = isset($_GET['user_id']) ? (int)$_GET['user_id'] : null;
+    $selected_user = null;
+    if (!empty($all_users)) {
+        if ($selected_user_id === null) {
+            $selected_user = $all_users[0];
+            $selected_user_id = $selected_user['id'];
+        } else {
+            foreach ($all_users as $u) {
+                if ((int)$u['id'] === $selected_user_id) { $selected_user = $u; break; }
+            }
+            if ($selected_user === null) { $selected_user = $all_users[0]; $selected_user_id = $selected_user['id']; }
+        }
+    }
+
     ?>
-    
-    <div class="card" style="margin-bottom: 25px; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: #fff;">
-        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
-            <div>
-                <h3 style="margin: 0 0 5px 0;">
-                    <?php echo htmlspecialchars($user['first_name'] . ' ' . $user['last_name']); ?>
-                </h3>
-                <div style="color: #666; font-size: 14px;">
-                    <span>@<?php echo htmlspecialchars($user['username']); ?></span> • 
-                    <span><?php echo htmlspecialchars($user['email']); ?></span> 
-                    <?php if ($user['is_admin']): ?>
-                        • <span class="badge badge-danger">Admin</span>
-                    <?php endif; ?>
-                    <?php if ($user['last_login']): ?>
-                        • <span style="color: #999;">Letzter Login: <?php echo format_datetime($user['last_login']); ?></span>
-                    <?php endif; ?>
-                </div>
+
+    <div class="user-management">
+        <div class="user-list-panel">
+            <h3 style="margin: 0 0 10px 0;">Benutzer</h3>
+            <div class="user-search-wrap">
+                <input type="text" id="userSearch" placeholder="Benutzer suchen…" aria-label="Benutzer suchen">
             </div>
-            <div>
-                <?php if ($user['id'] != $_SESSION['user_id']): ?>
-                    <button class="btn btn-sm btn-danger" onclick="deleteUser(<?php echo $user['id']; ?>)">Löschen</button>
-                <?php else: ?>
-                    <span class="badge badge-success">Aktueller Benutzer</span>
-                <?php endif; ?>
-            </div>
+            <ul class="user-list" id="userList">
+                <?php foreach ($all_users as $u): ?>
+                    <?php $is_active = ((int)$u['id'] === (int)$selected_user_id); ?>
+                    <li class="user-list-item <?php echo $is_active ? 'active' : ''; ?>" data-name="<?php echo htmlspecialchars(($u['first_name'] . ' ' . $u['last_name'] . ' ' . $u['username'])); ?>">
+                        <a href="settings.php?tab=users&user_id=<?php echo (int)$u['id']; ?>" class="user-list-link">
+                            <span class="user-avatar" aria-hidden="true"><?php echo strtoupper(substr($u['first_name'] ?: $u['username'], 0, 1)); ?></span>
+                            <span class="user-primary"><?php echo htmlspecialchars($u['first_name'] . ' ' . $u['last_name']); ?></span>
+                            <span class="user-secondary">@<?php echo htmlspecialchars($u['username']); ?></span>
+                            <?php if ($u['is_admin']): ?><span class="user-badge">Admin</span><?php endif; ?>
+                        </a>
+                    </li>
+                <?php endforeach; ?>
+            </ul>
         </div>
-        
-        <?php if ($user['is_admin']): ?>
-            <p style="color: #4caf50; margin: 10px 0; padding: 10px; background: #f1f8f4; border-radius: 4px;">
-                ✓ Admin hat automatisch alle Berechtigungen
-            </p>
-        <?php else: ?>
-            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee;">
-                <strong style="display: block; margin-bottom: 12px; color: #333;">Berechtigungen:</strong>
-                <?php foreach ($permissions_by_category as $category => $perms): ?>
-                    <div style="margin-bottom: 15px;">
-                        <span style="display: inline-block; font-weight: 600; margin-bottom: 6px; color: #555; font-size: 13px;"><?php echo htmlspecialchars($category); ?></span>
-                        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                            <?php foreach ($perms as $perm): 
-                                $has_permission = in_array($perm['id'], $user_perm_ids);
-                            ?>
-                                <form method="POST" style="display: inline;">
-                                    <input type="hidden" name="section" value="permissions">
-                                    <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
-                                    <input type="hidden" name="permission_id" value="<?php echo $perm['id']; ?>">
-                                    <input type="hidden" name="action" value="<?php echo $has_permission ? 'revoke' : 'grant'; ?>">
-                                    <button type="submit" class="btn <?php echo $has_permission ? 'btn-success' : 'btn-outline'; ?>" 
-                                            style="font-size: 12px; padding: 5px 10px; <?php echo !$has_permission ? 'background: #f5f5f5; color: #333; border: 2px solid #ddd;' : ''; ?>">
-                                        <?php echo $has_permission ? '✓ ' : ''; ?><?php echo htmlspecialchars($perm['display_name']); ?>
-                                    </button>
-                                </form>
-                            <?php endforeach; ?>
+
+        <div class="user-detail-panel">
+            <div id="userDetailContent">
+            <?php if ($selected_user): ?>
+                <div class="card user-detail-card">
+                    <div class="user-detail-header">
+                        <div class="user-ident">
+                            <h3 class="user-name"><?php echo htmlspecialchars($selected_user['first_name'] . ' ' . $selected_user['last_name']); ?></h3>
+                            <div class="user-meta">
+                                <span class="user-handle">@<?php echo htmlspecialchars($selected_user['username']); ?></span>
+                                • <span class="user-email"><?php echo htmlspecialchars($selected_user['email']); ?></span>
+                                <?php if ($selected_user['is_admin']): ?>
+                                    • <span class="badge badge-danger">Admin</span>
+                                <?php endif; ?>
+                                <?php if ($selected_user['last_login']): ?>
+                                    • <span class="user-last-login">Letzter Login: <?php echo format_datetime($selected_user['last_login']); ?></span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <div class="user-actions">
+                            <?php if ($selected_user['id'] != $_SESSION['user_id']): ?>
+                                <button class="btn btn-sm btn-danger" onclick="deleteUser(<?php echo (int)$selected_user['id']; ?>)">Löschen</button>
+                            <?php else: ?>
+                                <span class="badge badge-success">Aktueller Benutzer</span>
+                            <?php endif; ?>
                         </div>
                     </div>
-                <?php endforeach; ?>
+
+                    <?php if ($selected_user['is_admin']): ?>
+                        <p class="admin-info">✓ Admin hat automatisch alle Berechtigungen</p>
+                    <?php else: ?>
+                        <?php
+                        // Load permissions for selected user only
+                        $stmt = $db->prepare(
+                            "SELECT p.id, p.name, p.display_name, p.category
+                             FROM user_permissions up
+                             INNER JOIN permissions p ON up.permission_id = p.id
+                             WHERE up.user_id = ?
+                             ORDER BY p.category, p.display_name"
+                        );
+                        $stmt->execute([$selected_user['id']]);
+                        $user_permissions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                        $user_perm_ids = array_column($user_permissions, 'id');
+                        ?>
+
+                        <div class="permissions-section">
+                            <strong class="section-title">Berechtigungen</strong>
+                            <?php foreach ($permissions_by_category as $category => $perms): ?>
+                                <div class="permission-category">
+                                    <span class="category-title"><?php echo htmlspecialchars($category); ?></span>
+                                    <div class="permission-list">
+                                        <?php foreach ($perms as $perm): $has_permission = in_array($perm['id'], $user_perm_ids); ?>
+                                            <form method="POST" class="permission-item">
+                                                <input type="hidden" name="section" value="permissions">
+                                                <input type="hidden" name="user_id" value="<?php echo (int)$selected_user['id']; ?>">
+                                                <input type="hidden" name="permission_id" value="<?php echo (int)$perm['id']; ?>">
+                                                <input type="hidden" name="action" value="<?php echo $has_permission ? 'revoke' : 'grant'; ?>">
+                                                <button type="submit" class="btn <?php echo $has_permission ? 'btn-success' : 'btn-outline'; ?>">
+                                                    <?php echo $has_permission ? '✓ ' : ''; ?><?php echo htmlspecialchars($perm['display_name']); ?>
+                                                </button>
+                                            </form>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            <?php else: ?>
+                <div class="empty-state">
+                    <p>Keine aktiven Benutzer gefunden. Bitte fügen Sie einen neuen Benutzer hinzu.</p>
+                </div>
+            <?php endif; ?>
             </div>
-        <?php endif; ?>
+
+            <div class="user-add-section">
+                <h3>Neuen Benutzer hinzufügen</h3>
+                <form method="POST" class="user-form">
+                    <input type="hidden" name="section" value="users">
+                    <input type="hidden" name="action" value="add">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Benutzername *</label>
+                            <input type="text" name="username" required>
+                        </div>
+                        <div class="form-group">
+                            <label>E-Mail *</label>
+                            <input type="email" name="email" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Vorname</label>
+                            <input type="text" name="first_name">
+                        </div>
+                        <div class="form-group">
+                            <label>Nachname</label>
+                            <input type="text" name="last_name">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Passwort *</label>
+                            <input type="password" name="password" required>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" name="is_admin" value="1">
+                                Admin-Berechtigungen
+                            </label>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Benutzer hinzufügen</button>
+                </form>
+            </div>
+        </div>
     </div>
-    
-    <?php endforeach; ?>
-    
-    <h3>Neuen Benutzer hinzufügen</h3>
-    <form method="POST" class="user-form">
-        <input type="hidden" name="section" value="users">
-        <input type="hidden" name="action" value="add">
-        
-        <div class="form-row">
-            <div class="form-group">
-                <label>Benutzername *</label>
-                <input type="text" name="username" required>
-            </div>
-            <div class="form-group">
-                <label>E-Mail *</label>
-                <input type="email" name="email" required>
-            </div>
-        </div>
-        
-        <div class="form-row">
-            <div class="form-group">
-                <label>Vorname</label>
-                <input type="text" name="first_name">
-            </div>
-            <div class="form-group">
-                <label>Nachname</label>
-                <input type="text" name="last_name">
-            </div>
-        </div>
-        
-        <div class="form-row">
-            <div class="form-group">
-                <label>Passwort *</label>
-                <input type="password" name="password" required>
-            </div>
-            <div class="form-group">
-                <label>
-                    <input type="checkbox" name="is_admin" value="1">
-                    Admin-Berechtigungen
-                </label>
-            </div>
-        </div>
-        
-        <button type="submit" class="btn btn-primary">Benutzer hinzufügen</button>
-    </form>
 </div>
 
 
@@ -577,6 +701,71 @@ function showTab(tab) {
         document.querySelectorAll('.tab-btn')[3].classList.add('active');
     }
 }
+
+// Activate tab from URL parameter on load + intercept user selection to avoid reload
+document.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab');
+    if (tab) { showTab(tab); }
+
+    // Simple client-side filter for user list
+    const userSearch = document.getElementById('userSearch');
+    const userList = document.getElementById('userList');
+    if (userSearch && userList) {
+        userSearch.addEventListener('input', () => {
+            const q = userSearch.value.toLowerCase();
+            userList.querySelectorAll('.user-list-item').forEach(li => {
+                const name = (li.getAttribute('data-name') || '').toLowerCase();
+                li.style.display = name.includes(q) ? '' : 'none';
+            });
+        });
+
+        // Intercept clicks on user list and load details via AJAX
+        userList.addEventListener('click', (e) => {
+            const link = e.target.closest('.user-list-link');
+            if (!link) return;
+            e.preventDefault();
+            const targetUrl = new URL(link.href, window.location.origin);
+            const userId = targetUrl.searchParams.get('user_id');
+            if (!userId) return;
+            const ajaxUrl = new URL(window.location.href);
+            ajaxUrl.searchParams.set('ajax', 'user_detail');
+            ajaxUrl.searchParams.set('user_id', userId);
+            fetch(ajaxUrl.toString(), { credentials: 'same-origin' })
+                .then(r => r.text())
+                .then(html => {
+                    const panel = document.getElementById('userDetailContent');
+                    if (panel) panel.innerHTML = html;
+                    // Update active highlight
+                    userList.querySelectorAll('.user-list-item').forEach(li => li.classList.remove('active'));
+                    const li = link.closest('.user-list-item');
+                    if (li) li.classList.add('active');
+                    // Persist URL and tab without reload
+                    const newUrl = new URL(window.location.href);
+                    newUrl.searchParams.set('tab', 'users');
+                    newUrl.searchParams.set('user_id', userId);
+                    newUrl.searchParams.delete('ajax');
+                    history.pushState({ userId }, '', newUrl.toString());
+                    showTab('users');
+                })
+                .catch(err => console.error('Load user detail failed:', err));
+        });
+    }
+
+    // Handle back/forward navigation to reload details
+    window.addEventListener('popstate', () => {
+        const panel = document.getElementById('userDetailContent');
+        const userId = new URLSearchParams(window.location.search).get('user_id');
+        if (!panel || !userId) return;
+        const ajaxUrl = new URL(window.location.href);
+        ajaxUrl.searchParams.set('ajax', 'user_detail');
+        ajaxUrl.searchParams.set('user_id', userId);
+        fetch(ajaxUrl.toString(), { credentials: 'same-origin' })
+            .then(r => r.text())
+            .then(html => { panel.innerHTML = html; showTab('users'); })
+            .catch(() => {});
+    });
+});
 
 function deleteSocialMedia(id) {
     if (confirm('Diesen Social Media Link löschen?')) {
@@ -688,6 +877,92 @@ function deleteUser(id) {
     border: 1px solid var(--border-color);
     border-radius: 4px;
 }
+
+/* Users master-detail layout */
+.user-management {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 1.5rem;
+}
+
+.user-list-panel {
+    background: var(--light-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+.user-search-wrap {
+    margin-bottom: 0.75rem;
+}
+
+#userSearch {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+
+.user-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 60vh;
+    overflow: auto;
+}
+
+.user-list-item {
+    margin: 0;
+}
+
+.user-list-link {
+    display: grid;
+    grid-template-columns: 32px 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    border-radius: 6px;
+    color: inherit;
+    text-decoration: none;
+}
+
+.user-list-item.active .user-list-link {
+    background: #eef6ff;
+    border: 1px solid #d5e9ff;
+}
+
+.user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #1976d2;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+}
+
+.user-primary { font-weight: 600; }
+.user-secondary { color: #777; font-size: 13px; margin-left: 6px; }
+.user-badge { background: #fce8e6; color: #c62828; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
+
+.user-detail-panel { min-height: 300px; }
+.user-detail-card { padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: #fff; }
+.user-detail-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px; }
+.user-name { margin: 0 0 5px 0; }
+.user-meta { color: #666; font-size: 14px; }
+.user-last-login { color: #999; }
+.admin-info { color: #4caf50; margin: 10px 0; padding: 10px; background: #f1f8f4; border-radius: 4px; }
+
+.permissions-section { margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; }
+.section-title { display: block; margin-bottom: 12px; color: #333; }
+.permission-category { margin-bottom: 15px; }
+.category-title { display: inline-block; font-weight: 600; margin-bottom: 6px; color: #555; font-size: 13px; }
+.permission-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.permission-item .btn.btn-outline { background: #f5f5f5; color: #333; border: 2px solid #ddd; }
+
+.user-add-section { margin-top: 2rem; }
 </style>
 
 <?php include 'includes/footer.php'; ?>

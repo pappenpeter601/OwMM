@@ -351,7 +351,9 @@ function send_email($to, $subject, $message) {
  * Check if user can manage cash/financial transactions (admin or kassenpruefer)
  */
 function can_edit_cash() {
-    return has_permission('kontofuehrung.php');
+    return has_permission('kontofuehrung.php') || has_permission('members.php') || 
+           has_permission('generate_obligations.php') || has_permission('items.php') || 
+           has_permission('outstanding_obligations.php');
 }
 
 /**
