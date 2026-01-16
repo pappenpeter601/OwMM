@@ -20,55 +20,110 @@ function is_logged_in() {
     return isset($_SESSION['user_id']) && !empty($_SESSION['user_id']);
 }
 
+// Ensure user is authenticated and optionally has a required role
+function check_auth($required_role = null) {
+    if (!is_logged_in()) {
+        $_SESSION['redirect_to'] = $_SERVER['REQUEST_URI'] ?? null;
+        redirect('login.php');
+    }
+
+    if ($required_role !== null && !has_role($required_role)) {
+        $_SESSION['error'] = 'Zugriff verweigert.';
+        redirect('dashboard.php');
+    }
+}
+
 /**
- * Check if user has specific role
+ * Check if user has permission for current page
+ */
+function check_page_permission() {
+    $current_page = basename($_SERVER['PHP_SELF']);
+    
+    if (!has_permission($current_page)) {
+        redirect('dashboard.php');
+    }
+}
+
+/**
+ * Check if user has specific permission
+ */
+function has_permission($permission_name) {
+    if (!is_logged_in()) {
+        return false;
+    }
+    
+    // Admin always has all permissions
+    $is_admin = $_SESSION['is_admin'] ?? 0;
+    if ($is_admin) {
+        return true;
+    }
+    
+    $user_id = $_SESSION['user_id'];
+    $db = getDBConnection();
+    
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as has_perm
+        FROM user_permissions up
+        INNER JOIN permissions p ON up.permission_id = p.id
+        WHERE up.user_id = ? AND p.name = ?
+    ");
+    $stmt->execute([$user_id, $permission_name]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    return $result['has_perm'] > 0;
+}
+
+/**
+ * Check if user is admin
+ */
+function is_admin() {
+    if (!is_logged_in()) {
+        return false;
+    }
+    
+    return (bool)($_SESSION['is_admin'] ?? 0);
+}
+
+/**
+ * Deprecated: Use is_admin() or permission helpers instead - kept for backward compatibility
+ * Maps legacy role names to current permission checks.
  */
 function has_role($required_role) {
     if (!is_logged_in()) {
         return false;
     }
-    
-    $user_role = $_SESSION['user_role'] ?? '';
-    
-    // Admin has access to everything
-    if ($user_role === 'admin') {
-        return true;
+
+    if ($required_role === 'admin') {
+        return is_admin();
+    }
+
+    if ($required_role === 'kassenpruefer') {
+        // Kassenprüfer pages are guarded by these permissions
+        return is_admin() || has_permission('check_periods.php') || has_permission('kassenpruefer_assignments.php');
     }
     
-    return $user_role === $required_role;
+    return false;
 }
 
 /**
  * Check if user can edit operations (admin or pr_manager)
  */
 function can_edit_operations() {
-    if (!is_logged_in()) {
-        return false;
-    }
-    $role = $_SESSION['user_role'] ?? '';
-    return in_array($role, ['admin', 'pr_manager']);
+    return has_permission('operations.php');
 }
 
 /**
  * Check if user can edit events (admin or event_manager)
  */
 function can_edit_events() {
-    if (!is_logged_in()) {
-        return false;
-    }
-    $role = $_SESSION['user_role'] ?? '';
-    return in_array($role, ['admin', 'event_manager']);
+    return has_permission('events.php');
 }
 
 /**
  * Check if user can edit page content (admin or board)
  */
 function can_edit_page_content() {
-    if (!is_logged_in()) {
-        return false;
-    }
-    $role = $_SESSION['user_role'] ?? '';
-    return in_array($role, ['admin', 'board']);
+    return has_permission('content.php') || has_permission('board.php');
 }
 
 /**
@@ -296,11 +351,27 @@ function send_email($to, $subject, $message) {
  * Check if user can manage cash/financial transactions (admin or kassenpruefer)
  */
 function can_edit_cash() {
-    if (!is_logged_in()) {
-        return false;
-    }
-    $role = $_SESSION['user_role'] ?? '';
-    return in_array($role, ['admin', 'kassenpruefer']);
+    return has_permission('kontofuehrung.php') || has_permission('members.php') || 
+           has_permission('generate_obligations.php') || has_permission('items.php') || 
+           has_permission('outstanding_obligations.php');
+}
+
+/**
+ * Check if user can check transactions (admin or kassenpruefer)
+ */
+function can_check_transactions() {
+    return has_permission('check_periods.php') || has_permission('kassenpruefer_assignments.php');
+}
+
+/**
+ * Check if a transaction is locked (finalized in a check period)
+ */
+function is_transaction_locked($transaction_id) {
+    $db = getDBConnection();
+    $stmt = $db->prepare("SELECT checked_in_period_id FROM transactions WHERE id = :id");
+    $stmt->execute(['id' => $transaction_id]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $result && $result['checked_in_period_id'] !== null;
 }
 
 /**
@@ -371,7 +442,7 @@ function get_transaction_categories() {
  * Upload CSV transactions
  */
 function upload_csv_transactions($file) {
-    if ($file['size'] == 0 || !in_array($file['type'], ['text/csv', 'application/vnd.ms-excel'])) {
+    if ($file['size'] == 0 || !in_array($file['type'], ['text/csv', 'application/vnd.ms-excel', 'text/plain'])) {
         return ['success' => false, 'error' => 'Invalid file type'];
     }
     
@@ -379,48 +450,154 @@ function upload_csv_transactions($file) {
     $rows = [];
     $errors = [];
     $inserted = 0;
+    $skipped = 0;
+    $skipped_dates = [];
+    $user_id = isset($_SESSION['user_id']) ? $_SESSION['user_id'] : 1;
     
     if (($handle = fopen($file['tmp_name'], 'r')) !== FALSE) {
-        // Skip header row
-        fgetcsv($handle);
+        // Skip header row - use semicolon delimiter for German bank CSV
+        fgetcsv($handle, 0, ';');
         
+        // First pass: collect all dates from CSV and parse all transactions
+        $transactions_to_import = [];
+        $csv_dates = [];
+        $line_number = 1;
+        
+        while (($data = fgetcsv($handle, 0, ';')) !== FALSE) {
+            $line_number++;
+            
+            // German bank CSV format:
+            // 0: Auftragskonto, 1: Buchungstag, 2: Valutadatum, 3: Buchungstext, 
+            // 4: Verwendungszweck, 5: Beguenstigter/Zahlungspflichtiger, 6: Kontonummer/IBAN, 
+            // 7: BIC, 8: Betrag, 9: Waehrung, 10: Info, 11: Kategorie
+            
+            if (count($data) < 9) {
+                $errors[] = "Zeile $line_number: Ungültige Anzahl von Spalten (" . count($data) . ")";
+                continue;
+            }
+            
+            try {
+                // Parse date (DD.MM.YY format to YYYY-MM-DD)
+                $booking_date_str = trim($data[1]);
+                if (preg_match('/^(\d{2})\.(\d{2})\.(\d{2,4})$/', $booking_date_str, $matches)) {
+                    $day = $matches[1];
+                    $month = $matches[2];
+                    $year = $matches[3];
+                    // Convert 2-digit year to 4-digit
+                    if (strlen($year) == 2) {
+                        $year = '20' . $year;
+                    }
+                    $booking_date = "$year-$month-$day";
+                } else {
+                    $errors[] = "Zeile $line_number: Ungültiges Datumsformat '$booking_date_str'";
+                    continue;
+                }
+                
+                // Parse amount (replace comma with dot, remove spaces)
+                $amount_str = str_replace(',', '.', str_replace(' ', '', trim($data[8])));
+                $amount = floatval($amount_str);
+                
+                // Convert encoding from ISO-8859-1/Windows-1252 to UTF-8 for German characters
+                // Truncate to fit database column limits: booking_text(200), payer(100), iban(34)
+                $booking_text = mb_substr(mb_convert_encoding(trim($data[3]), 'UTF-8', 'ISO-8859-1'), 0, 200);
+                $purpose = mb_convert_encoding(trim($data[4]), 'UTF-8', 'ISO-8859-1'); // TEXT field, no limit
+                $payer = mb_substr(mb_convert_encoding(trim($data[5]), 'UTF-8', 'ISO-8859-1'), 0, 100);
+                $iban = mb_substr(mb_convert_encoding(trim($data[6]), 'UTF-8', 'ISO-8859-1'), 0, 34);
+                
+                // Store transaction for potential import
+                $transactions_to_import[] = [
+                    'booking_date' => $booking_date,
+                    'booking_text' => $booking_text,
+                    'purpose' => $purpose,
+                    'payer' => $payer,
+                    'iban' => $iban,
+                    'amount' => $amount,
+                    'line_number' => $line_number
+                ];
+                
+                // Collect unique dates
+                $csv_dates[$booking_date] = true;
+                
+            } catch (Exception $e) {
+                $errors[] = "Zeile $line_number: " . $e->getMessage();
+            }
+        }
+        fclose($handle);
+        
+        // Check which dates already exist in database
+        $existing_dates = [];
+        if (!empty($csv_dates)) {
+            $date_list = array_keys($csv_dates);
+            $placeholders = str_repeat('?,', count($date_list) - 1) . '?';
+            $stmt = $db->prepare("SELECT DISTINCT booking_date FROM transactions WHERE booking_date IN ($placeholders)");
+            $stmt->execute($date_list);
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $existing_dates[$row['booking_date']] = true;
+            }
+        }
+        
+        // Now import only transactions for dates that don't exist yet
         $db->beginTransaction();
         try {
-            $stmt = $db->prepare("INSERT INTO transactions (booking_date, booking_text, purpose, payer, iban, amount, category, comment, created_by) 
-                                   VALUES (:booking_date, :booking_text, :purpose, :payer, :iban, :amount, :category, :comment, :created_by)");
+            $insert_stmt = $db->prepare("INSERT INTO transactions 
+                                         (booking_date, booking_text, purpose, payer, iban, amount, created_by) 
+                                         VALUES (:booking_date, :booking_text, :purpose, :payer, :iban, :amount, :created_by)");
             
-            while (($data = fgetcsv($handle)) !== FALSE) {
-                if (count($data) >= 7) {
-                    try {
-                        $stmt->execute([
-                            ':booking_date' => $data[0] ?? null,
-                            ':booking_text' => $data[1] ?? null,
-                            ':purpose' => $data[2] ?? null,
-                            ':payer' => $data[3] ?? null,
-                            ':iban' => $data[4] ?? null,
-                            ':amount' => $data[5] ?? 0,
-                            ':category' => $data[6] ?? null,
-                            ':comment' => $data[7] ?? null,
-                            ':created_by' => $user_id
-                        ]);
-                        $inserted++;
-                    } catch (Exception $e) {
-                        $errors[] = "Row " . ($inserted + 1) . ": " . $e->getMessage();
+            foreach ($transactions_to_import as $trans) {
+                // Skip if this date already exists in database
+                if (isset($existing_dates[$trans['booking_date']])) {
+                    $skipped++;
+                    if (!isset($skipped_dates[$trans['booking_date']])) {
+                        $skipped_dates[$trans['booking_date']] = 0;
                     }
+                    $skipped_dates[$trans['booking_date']]++;
+                    continue;
+                }
+                
+                try {
+                    $insert_stmt->execute([
+                        ':booking_date' => $trans['booking_date'],
+                        ':booking_text' => $trans['booking_text'],
+                        ':purpose' => $trans['purpose'],
+                        ':payer' => $trans['payer'],
+                        ':iban' => $trans['iban'],
+                        ':amount' => $trans['amount'],
+                        ':created_by' => $user_id
+                    ]);
+                    $inserted++;
+                } catch (Exception $e) {
+                    $errors[] = "Zeile {$trans['line_number']}: " . $e->getMessage();
                 }
             }
+            
             $db->commit();
         } catch (Exception $e) {
             $db->rollBack();
             return ['success' => false, 'error' => $e->getMessage()];
         }
-        fclose($handle);
+    }
+    
+    $message = "Erfolgreich $inserted Transaktionen importiert";
+    if ($skipped > 0) {
+        $dates_info = array();
+        foreach ($skipped_dates as $date => $count) {
+            $dates_info[] = date('d.m.Y', strtotime($date)) . " ($count)";
+        }
+        $message .= ", $skipped Transaktionen übersprungen (bereits importierte Tage: " . implode(', ', $dates_info) . ")";
+    }
+    if (count($errors) > 0) {
+        $message .= ". Fehler: " . implode(', ', array_slice($errors, 0, 5));
+        if (count($errors) > 5) {
+            $message .= " (und " . (count($errors) - 5) . " weitere)";
+        }
     }
     
     return [
         'success' => true,
         'inserted' => $inserted,
-        'errors' => $errors
+        'skipped' => $skipped,
+        'errors' => $errors,
+        'message' => $message
     ];
 }
 
@@ -780,4 +957,185 @@ function get_member_payment_status($member_id, $year) {
 function get_members_with_outstanding_payments($year) {
     $obligations = get_open_obligations($year);
     return $obligations;
+
+/**
+ * Generate a secure magic link token for a user
+ * 
+ * @param int $user_id User ID
+ * @param PDO $pdo Database connection
+ * @return string Magic link token
+ */
+function generate_magic_link($user_id, $pdo = null) {
+    if ($pdo === null) {
+        $pdo = getDBConnection();
+    }
+    
+    // Generate cryptographically secure token
+    $token = bin2hex(random_bytes(32));
+    $expires_at = date('Y-m-d H:i:s', strtotime('+15 minutes'));
+    $ip_address = $_SERVER['REMOTE_ADDR'] ?? '';
+    $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    
+    // Store magic link in database
+    $stmt = $pdo->prepare("
+        INSERT INTO magic_links (token, user_id, expires_at, ip_address, user_agent, created_at)
+        VALUES (?, ?, ?, ?, ?, NOW())
+    ");
+    $stmt->execute([$token, $user_id, $expires_at, $ip_address, $user_agent]);
+    
+    return $token;
+}
+
+/**
+ * Verify a magic link token
+ * 
+ * @param string $token Magic link token
+ * @param PDO $pdo Database connection
+ * @return array|false User data if valid, false otherwise
+ */
+function verify_magic_link($token, $pdo = null) {
+    if ($pdo === null) {
+        $pdo = getDBConnection();
+    }
+    
+    // Find magic link with user data
+    $stmt = $pdo->prepare("
+        SELECT ml.*, u.id as user_id, u.username, u.first_name, u.last_name, u.email, u.role
+        FROM magic_links ml
+        JOIN users u ON ml.user_id = u.id
+        WHERE ml.token = ?
+    ");
+    $stmt->execute([$token]);
+    $magic_link = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$magic_link) {
+        return false;
+    }
+    
+    // Check if already used
+    if ($magic_link['used_at']) {
+        return false;
+    }
+    
+    // Check if expired
+    if (strtotime($magic_link['expires_at']) < time()) {
+        return false;
+    }
+    
+    return $magic_link;
+}
+
+/**
+ * Mark a magic link as used
+ * 
+ * @param string $token Magic link token
+ * @param PDO $pdo Database connection
+ * @return bool Success
+ */
+function mark_magic_link_used($token, $pdo = null) {
+    if ($pdo === null) {
+        $pdo = getDBConnection();
+    }
+    
+    $stmt = $pdo->prepare("
+        UPDATE magic_links 
+        SET used_at = NOW()
+        WHERE token = ?
+    ");
+    return $stmt->execute([$token]);
+}
+
+/**
+ * Check rate limiting for magic link requests
+ * 
+ * @param string $email Email address
+ * @param string $ip_address IP address
+ * @param int $max_attempts Maximum attempts allowed
+ * @param int $time_window Time window in minutes
+ * @param PDO $pdo Database connection
+ * @return bool True if rate limit not exceeded, false otherwise
+ */
+function check_rate_limit($email, $ip_address, $max_attempts = 3, $time_window = 15, $pdo = null) {
+    if ($pdo === null) {
+        $pdo = getDBConnection();
+    }
+    
+    $stmt = $pdo->prepare("
+        SELECT COUNT(*) as attempt_count
+        FROM login_attempts 
+        WHERE email = ? 
+        AND ip_address = ?
+        AND created_at > DATE_SUB(NOW(), INTERVAL ? MINUTE)
+    ");
+    $stmt->execute([$email, $ip_address, $time_window]);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    return $result['attempt_count'] < $max_attempts;
+}
+
+/**
+ * Log a login attempt
+ * 
+ * @param string $email Email address
+ * @param bool $success Whether login was successful
+ * @param string $method Authentication method ('password', 'magic_link')
+ * @param PDO $pdo Database connection
+ * @return bool Success
+ */
+function log_login_attempt($email, $success, $method = 'password', $pdo = null) {
+    if ($pdo === null) {
+        $pdo = getDBConnection();
+    }
+    
+    $ip_address = $_SERVER['REMOTE_ADDR'] ?? '';
+    $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    
+    $stmt = $pdo->prepare("
+        INSERT INTO login_attempts (email, ip_address, user_agent, success, method, created_at)
+        VALUES (?, ?, ?, ?, ?, NOW())
+    ");
+    return $stmt->execute([$email, $ip_address, $user_agent, (int)$success, $method]);
+}
+
+/**
+ * Clean up expired magic links
+ * Call this periodically (e.g., via cron job)
+ * 
+ * @param PDO $pdo Database connection
+ * @return int Number of deleted links
+ */
+function cleanup_expired_magic_links($pdo = null) {
+    if ($pdo === null) {
+        $pdo = getDBConnection();
+    }
+    
+    $stmt = $pdo->prepare("
+        DELETE FROM magic_links 
+        WHERE expires_at < NOW()
+        OR (used_at IS NOT NULL AND used_at < DATE_SUB(NOW(), INTERVAL 7 DAY))
+    ");
+    $stmt->execute();
+    return $stmt->rowCount();
+}
+
+/**
+ * Clean up old login attempts
+ * Call this periodically (e.g., via cron job)
+ * 
+ * @param int $days_to_keep Number of days to keep records
+ * @param PDO $pdo Database connection
+ * @return int Number of deleted records
+ */
+function cleanup_old_login_attempts($days_to_keep = 30, $pdo = null) {
+    if ($pdo === null) {
+        $pdo = getDBConnection();
+    }
+    
+    $stmt = $pdo->prepare("
+        DELETE FROM login_attempts 
+        WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)
+    ");
+    $stmt->execute([$days_to_keep]);
+    return $stmt->rowCount();
+}
 }

@@ -14,7 +14,7 @@
             <div class="sidebar-header">
                 <h2>Admin</h2>
                 <p><?php echo $_SESSION['user_name'] ?? $_SESSION['username']; ?></p>
-                <span class="user-role"><?php echo $_SESSION['user_role']; ?></span>
+                <span class="user-role"><?php echo $_SESSION['is_admin'] ? 'Admin' : 'Benutzer'; ?></span>
             </div>
             
             <nav class="sidebar-nav">
@@ -31,6 +31,12 @@
                 <?php if (can_edit_events()): ?>
                 <a href="events.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'events.php' ? 'active' : ''; ?>">
                     <i class="fas fa-calendar"></i> Veranstaltungen
+                </a>
+                <?php endif; ?>
+                
+                <?php if (has_permission('trucks.php')): ?>
+                <a href="trucks.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'trucks.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-truck"></i> Fahrzeuge
                 </a>
                 <?php endif; ?>
                 
@@ -61,11 +67,23 @@
                 </a>
                 <?php endif; ?>
                 
+                <?php if (can_check_transactions()): ?>
+                <a href="check_periods.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'check_periods.php' || basename($_SERVER['PHP_SELF']) == 'transaction_checking.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tasks"></i> Prüfperioden
+                </a>
+                <?php endif; ?>
+                
                 <?php if (has_role('admin')): ?>
+                <a href="kassenpruefer_assignments.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'kassenpruefer_assignments.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-user-check"></i> Kassenprüfer
+                </a>
                 <a href="messages.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'messages.php' ? 'active' : ''; ?>">
                     <i class="fas fa-envelope"></i> Nachrichten
                 </a>
-                <a href="settings.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'settings.php' ? 'active' : ''; ?>">
+                <a href="approve_registrations.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'approve_registrations.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-user-plus"></i> Registrierungen
+                </a>
+                <a href="settings.php" class="nav-item <?php echo (basename($_SERVER['PHP_SELF']) == 'settings.php' || basename($_SERVER['PHP_SELF']) == 'email_settings.php') ? 'active' : ''; ?>">
                     <i class="fas fa-cog"></i> Einstellungen
                 </a>
                 <?php endif; ?>

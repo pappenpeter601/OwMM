@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `username` varchar(50) NOT NULL,
   `email` varchar(100) NOT NULL,
   `password` varchar(255) NOT NULL,
-  `role` enum('admin','board','pr_manager','event_manager','kassenpruefer') NOT NULL DEFAULT 'pr_manager',
+  `is_admin` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Admin users automatically have all permissions',
   `first_name` varchar(50) DEFAULT NULL,
   `last_name` varchar(50) DEFAULT NULL,
   `active` tinyint(1) NOT NULL DEFAULT 1,
@@ -157,6 +157,8 @@ CREATE TABLE IF NOT EXISTS `transactions` (
   `comment` text,
   `document_id` int(11) DEFAULT NULL,
   `business_year` int(4) DEFAULT NULL COMMENT 'Fiscal year, automatically set from booking_date on import',
+  `check_status` enum('unchecked','checked','under_investigation') NOT NULL DEFAULT 'unchecked' COMMENT 'Status of accounting check',
+  `checked_in_period_id` int(11) DEFAULT NULL COMMENT 'Check period in which this was finalized (locks the transaction)',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `created_by` int(11) DEFAULT NULL,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -165,6 +167,8 @@ CREATE TABLE IF NOT EXISTS `transactions` (
   KEY `business_year` (`business_year`),
   KEY `category_id` (`category_id`),
   KEY `created_by` (`created_by`),
+  KEY `check_status` (`check_status`),
+  KEY `checked_in_period_id` (`checked_in_period_id`),
   CONSTRAINT `transactions_ibfk_1` FOREIGN KEY (`category_id`) REFERENCES `transaction_categories` (`id`) ON DELETE SET NULL,
   CONSTRAINT `transactions_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -183,6 +187,77 @@ CREATE TABLE IF NOT EXISTS `transaction_documents` (
   KEY `uploaded_by` (`uploaded_by`),
   CONSTRAINT `transaction_documents_ibfk_1` FOREIGN KEY (`transaction_id`) REFERENCES `transactions` (`id`) ON DELETE CASCADE,
   CONSTRAINT `transaction_documents_ibfk_2` FOREIGN KEY (`uploaded_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Kassenprüfer assignments (auditors checking the accounting)
+CREATE TABLE IF NOT EXISTS `kassenpruefer_assignments` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `member_id` int(11) NOT NULL COMMENT 'Active member assigned as Kassenprüfer',
+  `role_type` enum('leader','assistant') NOT NULL COMMENT 'leader=Leiter (experienced), assistant=Assistent (new)',
+  `valid_from` date NOT NULL,
+  `valid_until` date DEFAULT NULL COMMENT 'NULL means currently active',
+  `notes` text,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `member_id` (`member_id`),
+  KEY `role_type` (`role_type`),
+  KEY `valid_from` (`valid_from`),
+  KEY `valid_until` (`valid_until`),
+  KEY `created_by` (`created_by`),
+  CONSTRAINT `kassenpruefer_assignments_ibfk_1` FOREIGN KEY (`member_id`) REFERENCES `members` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `kassenpruefer_assignments_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Check periods (batches of transactions to be checked together)
+CREATE TABLE IF NOT EXISTS `check_periods` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `period_name` varchar(100) NOT NULL COMMENT 'e.g., "2025 Annual Check" or "Q1 2026"',
+  `business_year` int(4) NOT NULL COMMENT 'Fiscal year being checked',
+  `date_from` date NOT NULL COMMENT 'Start date of transactions included',
+  `date_to` date NOT NULL COMMENT 'End date of transactions included',
+  `status` enum('in_progress','finalized') NOT NULL DEFAULT 'in_progress',
+  `leader_id` int(11) NOT NULL COMMENT 'Kassenprüfer leader for this check',
+  `assistant_id` int(11) NOT NULL COMMENT 'Kassenprüfer assistant for this check',
+  `finalized_at` timestamp NULL DEFAULT NULL COMMENT 'When the leader finalized this check period',
+  `finalized_by` int(11) DEFAULT NULL COMMENT 'User who finalized (should be leader)',
+  `notes` text,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `period_name` (`period_name`),
+  KEY `business_year` (`business_year`),
+  KEY `status` (`status`),
+  KEY `leader_id` (`leader_id`),
+  KEY `assistant_id` (`assistant_id`),
+  KEY `finalized_by` (`finalized_by`),
+  KEY `created_by` (`created_by`),
+  CONSTRAINT `check_periods_ibfk_1` FOREIGN KEY (`leader_id`) REFERENCES `members` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `check_periods_ibfk_2` FOREIGN KEY (`assistant_id`) REFERENCES `members` (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `check_periods_ibfk_3` FOREIGN KEY (`finalized_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `check_periods_ibfk_4` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Transaction checks (individual check records for each transaction)
+CREATE TABLE IF NOT EXISTS `transaction_checks` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `transaction_id` int(11) NOT NULL,
+  `check_period_id` int(11) NOT NULL,
+  `checked_by_member_id` int(11) NOT NULL COMMENT 'Which Kassenprüfer reviewed this',
+  `check_date` date NOT NULL,
+  `check_result` enum('approved','under_investigation') NOT NULL,
+  `remarks` text COMMENT 'Comments/issues found during check',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `transaction_id` (`transaction_id`),
+  KEY `check_period_id` (`check_period_id`),
+  KEY `checked_by_member_id` (`checked_by_member_id`),
+  KEY `check_result` (`check_result`),
+  KEY `check_date` (`check_date`),
+  CONSTRAINT `transaction_checks_ibfk_1` FOREIGN KEY (`transaction_id`) REFERENCES `transactions` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `transaction_checks_ibfk_2` FOREIGN KEY (`check_period_id`) REFERENCES `check_periods` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `transaction_checks_ibfk_3` FOREIGN KEY (`checked_by_member_id`) REFERENCES `members` (`id`) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Members (both active members and supporters)
@@ -279,8 +354,8 @@ CREATE TABLE IF NOT EXISTS `member_payments` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Insert default admin user (password: admin123 - CHANGE THIS!)
-INSERT INTO `users` (`username`, `email`, `password`, `role`, `first_name`, `last_name`) VALUES
-('admin', 'admin@example.com', '$2y$10$Q508QQp7rNEJLQXGlnmC2.uzCUmjeVW6PNNANDRzHmzl/9Okger9y', 'admin', 'Admin', 'User');
+INSERT INTO `users` (`username`, `email`, `password`, `is_admin`, `first_name`, `last_name`) VALUES
+('admin', 'admin@example.com', '$2y$10$Q508QQp7rNEJLQXGlnmC2.uzCUmjeVW6PNNANDRzHmzl/9Okger9y', 1, 'Admin', 'User');
 
 -- Insert default page content
 INSERT INTO `page_content` (`section_key`, `title`, `content`) VALUES
