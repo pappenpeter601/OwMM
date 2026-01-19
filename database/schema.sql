@@ -9,16 +9,117 @@ CREATE TABLE IF NOT EXISTS `users` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `username` varchar(50) NOT NULL,
   `email` varchar(100) NOT NULL,
-  `password` varchar(255) NOT NULL,
+  `password` varchar(255) DEFAULT NULL COMMENT 'Optional for magic link only users',
   `is_admin` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Admin users automatically have all permissions',
   `first_name` varchar(50) DEFAULT NULL,
   `last_name` varchar(50) DEFAULT NULL,
   `active` tinyint(1) NOT NULL DEFAULT 1,
+  `auth_method` enum('password','magic_link','both') NOT NULL DEFAULT 'both' COMMENT 'Preferred authentication method',
+  `email_verified` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Email verification status',
+  `email_verified_at` datetime DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `last_login` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `username` (`username`),
   UNIQUE KEY `email` (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Email configuration table (stores SMTP settings)
+CREATE TABLE IF NOT EXISTS `email_config` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `smtp_host` varchar(255) NOT NULL,
+  `smtp_port` int(11) NOT NULL DEFAULT 587,
+  `smtp_username` varchar(255) NOT NULL,
+  `smtp_password` varchar(255) NOT NULL COMMENT 'Encrypted password',
+  `from_email` varchar(255) NOT NULL,
+  `from_name` varchar(255) NOT NULL,
+  `use_tls` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Magic link tokens (for passwordless authentication)
+CREATE TABLE IF NOT EXISTS `magic_links` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `token` varchar(64) NOT NULL,
+  `expires_at` datetime NOT NULL,
+  `used_at` datetime DEFAULT NULL,
+  `ip_address` varchar(45) DEFAULT NULL,
+  `user_agent` varchar(255) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `token` (`token`),
+  KEY `user_id` (`user_id`),
+  KEY `expires_at` (`expires_at`),
+  CONSTRAINT `magic_links_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Registration requests (pending admin approval)
+CREATE TABLE IF NOT EXISTS `registration_requests` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `email` varchar(255) NOT NULL,
+  `first_name` varchar(100) NOT NULL,
+  `last_name` varchar(100) NOT NULL,
+  `token` varchar(64) NOT NULL COMMENT 'Email verification token',
+  `status` enum('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  `ip_address` varchar(45) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `email_verified_at` datetime DEFAULT NULL,
+  `approved_by` int(11) DEFAULT NULL,
+  `approved_at` datetime DEFAULT NULL,
+  `rejection_reason` text,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `token` (`token`),
+  KEY `email` (`email`),
+  KEY `status` (`status`),
+  KEY `approved_by` (`approved_by`),
+  CONSTRAINT `registration_requests_ibfk_1` FOREIGN KEY (`approved_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Login attempts tracking (rate limiting and security)
+CREATE TABLE IF NOT EXISTS `login_attempts` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `email` varchar(255) NOT NULL,
+  `ip_address` varchar(45) NOT NULL,
+  `success` tinyint(1) NOT NULL DEFAULT 0,
+  `method` enum('password','magic_link') NOT NULL,
+  `user_agent` varchar(255) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `email` (`email`),
+  KEY `ip_address` (`ip_address`),
+  KEY `created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Permissions table (defines all available permissions)
+CREATE TABLE IF NOT EXISTS `permissions` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) NOT NULL COMMENT 'Machine name like edit_operations',
+  `display_name` varchar(100) NOT NULL COMMENT 'Human readable name',
+  `description` text,
+  `category` varchar(50) DEFAULT NULL COMMENT 'Group permissions by category',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- User permissions junction table (many-to-many)
+CREATE TABLE IF NOT EXISTS `user_permissions` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `permission_id` int(11) NOT NULL,
+  `granted_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `granted_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `user_permission` (`user_id`, `permission_id`),
+  KEY `user_id` (`user_id`),
+  KEY `permission_id` (`permission_id`),
+  KEY `granted_by` (`granted_by`),
+  CONSTRAINT `user_permissions_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `user_permissions_ibfk_2` FOREIGN KEY (`permission_id`) REFERENCES `permissions` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `user_permissions_ibfk_3` FOREIGN KEY (`granted_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Landing page content (editable by board members)
@@ -35,6 +136,60 @@ CREATE TABLE IF NOT EXISTS `page_content` (
   KEY `updated_by` (`updated_by`),
   CONSTRAINT `page_content_ibfk_1` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Gallery images (for homepage carousel and truck galleries)
+CREATE TABLE IF NOT EXISTS `gallery_images` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `truck_id` int(11) DEFAULT NULL COMMENT 'If set, this image belongs to a truck gallery',
+  `image_url` varchar(255) NOT NULL,
+  `caption` varchar(255) DEFAULT NULL,
+  `sort_order` int(11) DEFAULT 0,
+  `is_active` tinyint(1) DEFAULT 1,
+  `uploaded_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `truck_id` (`truck_id`),
+  KEY `uploaded_by` (`uploaded_by`),
+  KEY `sort_order` (`sort_order`),
+  CONSTRAINT `gallery_images_ibfk_1` FOREIGN KEY (`uploaded_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Fire trucks
+CREATE TABLE IF NOT EXISTS `trucks` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) NOT NULL,
+  `description` text,
+  `cover_image` varchar(255) DEFAULT NULL,
+  `sort_order` int(11) DEFAULT 0,
+  `is_active` tinyint(1) DEFAULT 1,
+  `created_by` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `created_by` (`created_by`),
+  KEY `sort_order` (`sort_order`),
+  CONSTRAINT `trucks_ibfk_1` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Truck specifications
+CREATE TABLE IF NOT EXISTS `truck_specifications` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `truck_id` int(11) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `description` text,
+  `image_url` varchar(255) DEFAULT NULL,
+  `sort_order` int(11) DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `truck_id` (`truck_id`),
+  KEY `sort_order` (`sort_order`),
+  CONSTRAINT `truck_specifications_ibfk_1` FOREIGN KEY (`truck_id`) REFERENCES `trucks` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Add foreign key constraint for gallery_images to trucks (after trucks table is created)
+ALTER TABLE `gallery_images`
+  ADD CONSTRAINT `gallery_images_truck_fk` FOREIGN KEY (`truck_id`) REFERENCES `trucks` (`id`) ON DELETE CASCADE;
 
 -- Operations/Einsätze
 CREATE TABLE IF NOT EXISTS `operations` (
@@ -354,8 +509,12 @@ CREATE TABLE IF NOT EXISTS `member_payments` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Insert default admin user (password: admin123 - CHANGE THIS!)
-INSERT INTO `users` (`username`, `email`, `password`, `is_admin`, `first_name`, `last_name`) VALUES
-('admin', 'admin@example.com', '$2y$10$Q508QQp7rNEJLQXGlnmC2.uzCUmjeVW6PNNANDRzHmzl/9Okger9y', 1, 'Admin', 'User');
+INSERT INTO `users` (`username`, `email`, `password`, `is_admin`, `first_name`, `last_name`, `email_verified`) VALUES
+('admin', 'admin@example.com', '$2y$10$Q508QQp7rNEJLQXGlnmC2.uzCUmjeVW6PNNANDRzHmzl/9Okger9y', 1, 'Admin', 'User', 1);
+
+-- Insert default email configuration (update with your values)
+INSERT INTO `email_config` (`smtp_host`, `smtp_port`, `smtp_username`, `smtp_password`, `from_email`, `from_name`, `use_tls`)
+VALUES ('smtp.ionos.de', 587, '', '', 'noreply@feuerwehr-example.de', 'Feuerwehr OwMM', 1);
 
 -- Insert default page content
 INSERT INTO `page_content` (`section_key`, `title`, `content`) VALUES
@@ -390,6 +549,31 @@ INSERT INTO `membership_fees` (`member_type`, `minimum_amount`, `valid_from`, `v
 -- Insert initial balance / opening balance
 INSERT INTO `transactions` (`booking_date`, `booking_text`, `amount`, `business_year`, `comment`) VALUES
 ('2023-12-31', 'Startsaldo / Anfangsbestand', 9903.38, 2023, 'Anfangsbestand zum Start der Buchführung');
+
+-- Insert default permissions (using PHP filenames as keys for easy maintenance)
+INSERT INTO `permissions` (`name`, `display_name`, `description`, `category`) VALUES
+('operations.php', 'Einsätze', 'Einsätze verwalten', 'Basic'),
+('events.php', 'Veranstaltungen', 'Events verwalten', 'Basic'),
+('trucks.php', 'Fahrzeuge', 'Fahrzeuge verwalten', 'Basic'),
+('documents.php', 'Dokumente', 'Dokumente verwalten', 'Basic'),
+('content.php', 'Seiteninhalte', 'Seiteninhalte bearbeiten', 'Basic'),
+('board.php', 'Kommando', 'Kommandomitglieder verwalten', 'Kommando'),
+('messages.php', 'Kontaktanfragen', 'Nachrichten ansehen', 'Kommando'),
+('kassenpruefer_assignments.php', 'Kassenprüfer', 'Prüfer zuweisen', 'Finanzen'),
+('check_periods.php', 'Prüfperioden', 'Kassenprüfung nach Perioden', 'Kassenprüfer'),
+('approve_registrations.php', 'Registrierungen', 'Registrierungen genehmigen', 'Administration'),
+('settings.php', 'Einstellungen', 'System-Einstellungen', 'Administration'),
+('kontofuehrung.php', 'Kontoführung', 'Transaktionen verwalten', 'Finanzen'),
+('members.php', 'Mitglieder', 'Mitglieder verwalten', 'Basic'),
+('generate_obligations.php', 'Beitragsforderungen', 'Beiträge generieren', 'Finanzen'),
+('items.php', 'Artikel', 'Artikel verwalten', 'Basic'),
+('outstanding_obligations.php', 'Artikelverpflichtungen', 'Artikelverpflichtungen verwalten', 'Finanzen'),
+('selfservice.php', 'Self-Service', 'Zugriff auf Organisationsdaten', 'Basic'),
+('calendar.php', 'Kalender', 'Gemeinsamen Kalender verwalten', 'Basic');
+
+-- Grant admin user all permissions (assuming user id=1 is admin)
+INSERT INTO `user_permissions` (`user_id`, `permission_id`)
+SELECT 1, id FROM `permissions`;
 
 -- Items (equipment/goods that can be lent or rented)
 CREATE TABLE IF NOT EXISTS `items` (
@@ -446,4 +630,24 @@ CREATE TABLE IF NOT EXISTS `obligation_items` (
   KEY `item_id` (`item_id`),
   CONSTRAINT `obligation_items_ibfk_1` FOREIGN KEY (`obligation_id`) REFERENCES `item_obligations` (`id`) ON DELETE CASCADE,
   CONSTRAINT `obligation_items_ibfk_2` FOREIGN KEY (`item_id`) REFERENCES `items` (`id`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Self-service credentials (WiFi, accounts, etc.)
+CREATE TABLE IF NOT EXISTS `credentials` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(200) NOT NULL COMMENT 'Display name (e.g., "Office WiFi", "PayPal Account")',
+  `description` text DEFAULT NULL COMMENT 'Additional information',
+  `login` varchar(255) DEFAULT NULL COMMENT 'Username/Login/Email',
+  `value` text DEFAULT NULL COMMENT 'Base64-encoded password/IBAN/key/secret (obfuscation only)',
+  `website` varchar(500) DEFAULT NULL COMMENT 'Related URL',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_by` int(11) DEFAULT NULL,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `updated_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `created_by` (`created_by`),
+  KEY `updated_by` (`updated_by`),
+  KEY `name` (`name`),
+  CONSTRAINT `credentials_ibfk_1` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `credentials_ibfk_2` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -18,7 +18,8 @@ $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_p
                       has_permission('events.php') || has_permission('trucks.php') || has_permission('content.php') || 
                       has_permission('board.php') || has_permission('messages.php') || 
                       has_permission('kassenpruefer_assignments.php') || has_permission('approve_registrations.php') || 
-                      has_permission('settings.php') || has_permission('check_periods.php');
+                      has_permission('settings.php') || has_permission('check_periods.php') || 
+                      has_permission('selfservice.php') || has_permission('calendar.php');
 ?>
 
 <?php if (!$has_any_permission): ?>
@@ -175,6 +176,7 @@ $perm_details = [
     'trucks.php' => ['icon' => '🚒', 'title' => 'Fahrzeuge', 'desc' => 'Feuerwehrfahrzeuge und Ausstattung verwalten', 'url' => 'trucks.php'],
     'content.php' => ['icon' => '📝', 'title' => 'Seiteninhalte', 'desc' => 'Startseite und allgemeine Inhalte bearbeiten', 'url' => 'content.php'],
     'board.php' => ['icon' => '👥', 'title' => 'Kommando', 'desc' => 'Kommandomitglieder verwalten', 'url' => 'board.php'],
+    'selfservice.php' => ['icon' => '🔑', 'title' => 'Self-Service', 'desc' => 'Zugangsdaten und Organisationsinformationen', 'url' => 'selfservice.php'],
     'messages.php' => ['icon' => '💬', 'title' => 'Kontaktanfragen', 'desc' => 'Eingegangene Nachrichten ansehen', 'url' => 'messages.php'],
     'kassenpruefer_assignments.php' => ['icon' => '🧾', 'title' => 'Kassenprüfer', 'desc' => 'Prüferrollen zuweisen und verwalten', 'url' => 'kassenpruefer_assignments.php'],
     'approve_registrations.php' => ['icon' => '👤', 'title' => 'Registrierungen', 'desc' => 'Neue Benutzerregistrierungen genehmigen', 'url' => 'approve_registrations.php'],
@@ -184,6 +186,7 @@ $perm_details = [
     'generate_obligations.php' => ['icon' => '📋', 'title' => 'Beitragsforderungen', 'desc' => 'Jahresbeiträge generieren und verwalten', 'url' => 'generate_obligations.php'],
     'items.php' => ['icon' => '📦', 'title' => 'Artikel', 'desc' => 'Artikel und Gegenstände verwalten', 'url' => 'items.php'],
     'outstanding_obligations.php' => ['icon' => '🔗', 'title' => 'Artikelverpflichtungen', 'desc' => 'Artikel-Verpflichtungen erstellen und verwalten', 'url' => 'outstanding_obligations.php'],
+    'calendar.php' => ['icon' => '📆', 'title' => 'Kalender', 'desc' => 'Gemeinsamen Kalender verwalten', 'url' => 'calendar.php'],
     'check_periods.php' => ['icon' => '✅', 'title' => 'Prüfperioden', 'desc' => 'Kassenprüfung nach Perioden durchführen', 'url' => 'check_periods.php'],
 ];
 ?>
