@@ -268,7 +268,7 @@ body {
 .data-table {
     width: 100%;
     border-collapse: collapse;
-    table-layout: fixed;
+    table-layout: auto;
 }
 
 .data-table th,
@@ -322,55 +322,34 @@ body {
 }
 
 .transactions-table td.date {
-    width: 70px;
+    min-width: 75px;
     white-space: nowrap;
 }
 
-.transactions-table td.purpose {
-    width: 150px;
-    word-break: break-word;
-    white-space: normal;
-}
-
-.transactions-table td.payer {
-    width: 100px;
-    word-break: break-word;
-    white-space: normal;
+.transactions-table td.purpose-payer {
+    min-width: 200px;
+    padding: 0.75rem !important;
 }
 
 .transactions-table td.amount {
-    width: 80px;
+    min-width: 75px;
     white-space: nowrap;
     text-align: right;
 }
 
-.transactions-table td.category {
-    width: 110px;
-    padding: 0.5rem !important;
+.transactions-table td.category-gj-status {
+    min-width: 200px;
+    padding: 0.75rem !important;
+    vertical-align: middle;
 }
 
-.transactions-table td.business-year {
-    width: 70px;
-    padding: 0.5rem !important;
-}
-
-.transactions-table td.documents {
-    width: 90px;
-    padding: 0.5rem !important;
-}
-
-.transactions-table td.obligations {
-    width: 100px;
+.transactions-table td.docs-obligations {
+    min-width: 130px;
     padding: 0.5rem !important;
 }
 
 .transactions-table td.notes {
-    width: 150px;
-    padding: 0.5rem !important;
-}
-
-.transactions-table td.actions {
-    width: 60px;
+    min-width: 350px;
     padding: 0.5rem !important;
 }
 

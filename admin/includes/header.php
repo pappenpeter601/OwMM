@@ -33,6 +33,12 @@
                     <i class="fas fa-calendar"></i> Veranstaltungen
                 </a>
                 <?php endif; ?>
+
+                <?php if (has_permission('calendar.php')): ?>
+                <a href="calendar.php" class="nav-item <?php echo (basename($_SERVER['PHP_SELF']) == 'calendar.php' || basename($_SERVER['PHP_SELF']) == 'calendar_settings.php') ? 'active' : ''; ?>">
+                    <i class="fas fa-calendar-check"></i> Kalender
+                </a>
+                <?php endif; ?>
                 
                 <?php if (has_permission('trucks.php')): ?>
                 <a href="trucks.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'trucks.php' ? 'active' : ''; ?>">
@@ -46,6 +52,12 @@
                 </a>
                 <a href="board.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'board.php' ? 'active' : ''; ?>">
                     <i class="fas fa-users"></i> Kommando
+                </a>
+                <?php endif; ?>
+                
+                <?php if (has_permission('selfservice.php')): ?>
+                <a href="selfservice.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'selfservice.php' || basename($_SERVER['PHP_SELF']) == 'selfservice_api.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-key"></i> Self-Service
                 </a>
                 <?php endif; ?>
                 
@@ -63,7 +75,7 @@
                     <i class="fas fa-box"></i> Artikel
                 </a>
                 <a href="outstanding_obligations.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'outstanding_obligations.php' || basename($_SERVER['PHP_SELF']) == 'create_item_obligation.php' || basename($_SERVER['PHP_SELF']) == 'view_item_obligation.php' ? 'active' : ''; ?>">
-                    <i class="fas fa-link"></i> Artikelverpflichtungen
+                    <i class="fas fa-link"></i> Offene Forderungen
                 </a>
                 <?php endif; ?>
                 

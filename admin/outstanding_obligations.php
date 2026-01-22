@@ -16,11 +16,35 @@ if (!is_logged_in() || !can_edit_cash()) {
 
 $year = $_GET['year'] ?? date('Y');
 $tab = $_GET['tab'] ?? 'fees'; // 'fees' or 'items'
+$search = $_GET['search'] ?? '';
+$status_filter = $_GET['status'] ?? ''; // 'open', 'partial', 'paid' for fees; 'open', 'partial', 'paid' for items
+$member_type_filter = $_GET['member_type'] ?? ''; // 'active', 'supporter', 'pensioner'
 $db = getDBConnection();
 $error = '';
 
 // Get fee obligations for the year
 $open_obligations = get_open_obligations($year);
+
+// Apply filters to fee obligations
+if (!empty($search)) {
+    $search_lower = strtolower($search);
+    $open_obligations = array_filter($open_obligations, function($obl) use ($search_lower) {
+        return strpos(strtolower($obl['first_name'] . ' ' . $obl['last_name']), $search_lower) !== false ||
+               strpos(strtolower($obl['member_number']), $search_lower) !== false;
+    });
+}
+
+if (!empty($status_filter)) {
+    $open_obligations = array_filter($open_obligations, function($obl) use ($status_filter) {
+        return $obl['status'] === $status_filter;
+    });
+}
+
+if (!empty($member_type_filter)) {
+    $open_obligations = array_filter($open_obligations, function($obl) use ($member_type_filter) {
+        return $obl['member_type'] === $member_type_filter;
+    });
+}
 
 // Get ALL fee obligations for the year (including paid) for accurate totals
 $stmt = $db->prepare("SELECT fee_amount, paid_amount, (fee_amount - paid_amount) as outstanding
@@ -46,15 +70,41 @@ try {
                                   COALESCE(m.first_name, '') as member_first_name,
                                   COALESCE(m.last_name, '') as member_last_name,
                                   COALESCE(m.member_number, '') as member_number,
+                                  COALESCE(m.member_type, '') as member_type,
                                   COALESCE(om.first_name, '') as org_first_name,
                                   COALESCE(om.last_name, '') as org_last_name
                           FROM item_obligations io
                           LEFT JOIN members m ON io.member_id = m.id
                           LEFT JOIN members om ON io.organizing_member_id = om.id
-                          WHERE io.status = 'open'
                           ORDER BY ISNULL(io.due_date) ASC, io.due_date ASC, io.created_at DESC");
     $stmt->execute();
     $open_item_obligations = $stmt->fetchAll();
+    
+    // Apply search filter to item obligations
+    if (!empty($search)) {
+        $search_lower = strtolower($search);
+        $open_item_obligations = array_filter($open_item_obligations, function($obl) use ($search_lower) {
+            $name = (!empty($obl['member_first_name']) || !empty($obl['member_last_name'])) 
+                    ? $obl['member_first_name'] . ' ' . $obl['member_last_name']
+                    : $obl['receiver_name'];
+            return strpos(strtolower($name), $search_lower) !== false ||
+                   strpos(strtolower($obl['member_number']), $search_lower) !== false;
+        });
+    }
+    
+    // Apply status filter to item obligations
+    if (!empty($status_filter)) {
+        $open_item_obligations = array_filter($open_item_obligations, function($obl) use ($status_filter) {
+            return $obl['status'] === $status_filter;
+        });
+    }
+    
+    // Apply member_type filter to item obligations
+    if (!empty($member_type_filter)) {
+        $open_item_obligations = array_filter($open_item_obligations, function($obl) use ($member_type_filter) {
+            return $obl['member_type'] === $member_type_filter;
+        });
+    }
 
     // Calculate totals from ALL item obligations (including paid) 
     $stmt = $db->prepare("SELECT total_amount, paid_amount, (total_amount - paid_amount) as outstanding
@@ -171,28 +221,92 @@ include 'includes/header.php';
     <?php endif; ?>
 </div>
 
-<!-- Year Filter and Tabs -->
-<div class="filters-bar">
-    <form method="GET" class="filters-form">
-        <div class="filter-group">
-            <label>Jahr:</label>
-            <select name="year" onchange="this.form.submit()">
-                <?php for ($y = date('Y') - 2; $y <= date('Y') + 1; $y++): ?>
-                    <option value="<?= $y ?>" <?= $y == $year ? 'selected' : '' ?>><?= $y ?></option>
-                <?php endfor; ?>
-            </select>
+<!-- Year/Tab and Filter Section -->
+<div class="section-card">
+    <h2>Filter</h2>
+    <form method="GET" class="filter-form" style="display: flex; flex-direction: column; gap: 0.75rem;">
+        <!-- Row 1: Year, Member Type and Status filters -->
+        <div class="filter-row" style="display: flex; flex-wrap: wrap; gap: 1rem; width: 100%;">
+            <div class="form-group">
+                <label for="year">Jahr</label>
+                <select id="year" name="year">
+                    <?php for ($y = date('Y') - 2; $y <= date('Y') + 1; $y++): ?>
+                        <option value="<?= $y ?>" <?= $y == $year ? 'selected' : '' ?>><?= $y ?></option>
+                    <?php endfor; ?>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="member_type">Mitgliedertyp</label>
+                <select id="member_type" name="member_type">
+                    <option value="">Alle Typen</option>
+                    <option value="active" <?= $member_type_filter === 'active' ? 'selected' : '' ?>>Einsatzeinheit</option>
+                    <option value="supporter" <?= $member_type_filter === 'supporter' ? 'selected' : '' ?>>Förderer</option>
+                    <option value="pensioner" <?= $member_type_filter === 'pensioner' ? 'selected' : '' ?>>Altersabteilung</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="status">Status</label>
+                <select id="status" name="status">
+                    <option value="">Alle Status</option>
+                    <option value="open" <?= $status_filter === 'open' ? 'selected' : '' ?>>Offen</option>
+                    <option value="partial" <?= $status_filter === 'partial' ? 'selected' : '' ?>>Teilzahlung</option>
+                    <option value="paid" <?= $status_filter === 'paid' ? 'selected' : '' ?>>Bezahlt</option>
+                </select>
+            </div>
+        </div>
+        
+        <!-- Row 2: Search -->
+        <div class="filter-row" style="display: flex; flex-wrap: wrap; gap: 1rem; width: 100%;">
+            <div class="form-group" style="min-width: 280px; flex: 1 1 100%;">
+                <label for="search">Suche</label>
+                <input type="text" id="search" name="search" value="<?= htmlspecialchars($search) ?>" 
+                       placeholder="Mitgliedsname oder Mitgliedsnummer..." style="width: 100%;">
+            </div>
+        </div>
+        
+        <!-- Row 3: Buttons -->
+        <div class="filter-row" style="display: flex; justify-content: flex-end; gap: 0.5rem; width: 100%;">
+            <button type="submit" class="btn btn-secondary">Filtern</button>
+            <a href="outstanding_obligations.php?tab=<?= htmlspecialchars($tab) ?>" class="btn btn-secondary">Zurücksetzen</a>
         </div>
     </form>
-    
-    <!-- Tab Navigation -->
-    <div class="tabs">
-        <a href="?year=<?= $year ?>&tab=fees" class="tab-button <?= $tab === 'fees' ? 'active' : '' ?>">
-            <i class="fas fa-file-invoice-dollar"></i> Mitgliedsbeiträge
-        </a>
-        <a href="?year=<?= $year ?>&tab=items" class="tab-button <?= $tab === 'items' ? 'active' : '' ?>">
-            <i class="fas fa-boxes"></i> Artikel-Forderungen
-        </a>
-    </div>
+</div>
+
+<?php 
+// Build active filter hints for UI
+$active_filters = [];
+if ($year != date('Y')) {
+    $active_filters[] = 'Jahr: ' . $year;
+}
+if ($member_type_filter !== '') {
+    $member_type_labels = ['active' => 'Einsatzeinheit', 'supporter' => 'Förderer', 'pensioner' => 'Altersabteilung'];
+    $active_filters[] = 'Typ: ' . ($member_type_labels[$member_type_filter] ?? $member_type_filter);
+}
+if ($status_filter !== '') {
+    $status_labels = ['open' => 'Offen', 'partial' => 'Teilzahlung', 'paid' => 'Bezahlt'];
+    $active_filters[] = 'Status: ' . ($status_labels[$status_filter] ?? $status_filter);
+}
+if ($search !== '') {
+    $active_filters[] = 'Suche: "' . htmlspecialchars($search) . '"';
+}
+?>
+
+<?php if (!empty($active_filters)): ?>
+<div class="alert" style="background-color: #e8f4fd; color: #0b4f7d; border-left: 4px solid #1976d2; margin-top: 0.5rem;">
+    Aktive Filter: <?= htmlspecialchars(implode(' · ', $active_filters)) ?>
+</div>
+<?php endif; ?>
+
+<!-- Tab Navigation -->
+<div class="tabs" style="margin: 1rem 0; border-bottom: 2px solid #e0e0e0; display: flex; gap: 0;">
+    <a href="?year=<?= $year ?>&tab=fees&search=<?= urlencode($search) ?>&status=<?= urlencode($status_filter) ?>&member_type=<?= urlencode($member_type_filter) ?>" 
+       class="tab-button" style="padding: 0.75rem 1.5rem; border-bottom: 3px solid transparent; text-decoration: none; font-weight: 600; color: #666; <?= $tab === 'fees' ? 'border-bottom-color: #2196f3; color: #2196f3;' : '' ?>">
+        <i class="fas fa-file-invoice-dollar"></i> Mitgliedsbeiträge
+    </a>
+    <a href="?year=<?= $year ?>&tab=items&search=<?= urlencode($search) ?>&status=<?= urlencode($status_filter) ?>&member_type=<?= urlencode($member_type_filter) ?>" 
+       class="tab-button" style="padding: 0.75rem 1.5rem; border-bottom: 3px solid transparent; text-decoration: none; font-weight: 600; color: #666; <?= $tab === 'items' ? 'border-bottom-color: #2196f3; color: #2196f3;' : '' ?>">
+        <i class="fas fa-boxes"></i> Artikel-Forderungen
+    </a>
 </div>
 
 <!-- Outstanding Obligations Table -->

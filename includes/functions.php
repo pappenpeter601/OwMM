@@ -849,15 +849,25 @@ function add_payment_to_obligation($obligation_id, $amount, $payment_date, $tran
             throw new Exception('Obligation not found');
         }
         
-        // Check if transaction already linked to another obligation
+        // Validate against transaction remaining amount when provided
         if ($transaction_id) {
-            $stmt = $db->prepare("SELECT id FROM member_payments WHERE transaction_id = :transaction_id");
-            $stmt->execute([':transaction_id' => $transaction_id]);
-            if ($stmt->fetch()) {
-                throw new Exception('Transaction already linked to another obligation');
+            $stmt = $db->prepare("SELECT amount FROM transactions WHERE id = :id");
+            $stmt->execute([':id' => $transaction_id]);
+            $transaction = $stmt->fetch();
+            if ($transaction) {
+                if ($transaction['amount'] <= 0) {
+                    throw new Exception('Nur Einnahmen können verknüpft werden');
+                }
+                $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) AS total_linked FROM member_payments WHERE transaction_id = :transaction_id");
+                $stmt->execute([':transaction_id' => $transaction_id]);
+                $total_linked = $stmt->fetchColumn();
+                $remaining = $transaction['amount'] - $total_linked;
+                if ($amount > $remaining + 0.0001) {
+                    throw new Exception('Verknüpfung überschreitet den Transaktionsbetrag');
+                }
             }
         }
-        
+
         // Insert payment
         $stmt = $db->prepare("INSERT INTO member_payments 
                              (obligation_id, transaction_id, payment_date, amount, payment_method, notes, created_by)

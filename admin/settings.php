@@ -81,6 +81,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'last_name' => $last_name
             ]);
             $success = "Benutzer erfolgreich hinzugefügt";
+        } elseif ($action === 'update_member_link') {
+            $user_id = (int)$_POST['user_id'];
+            $member_id = !empty($_POST['member_id']) ? (int)$_POST['member_id'] : null;
+            
+            // If linking to a member, ensure no other user is already linked to this member
+            if ($member_id) {
+                // Check if this member is already linked to another user
+                $stmt = $db->prepare("SELECT id FROM users WHERE member_id = :member_id AND id != :user_id");
+                $stmt->execute(['member_id' => $member_id, 'user_id' => $user_id]);
+                $existing_user = $stmt->fetch();
+                
+                if ($existing_user) {
+                    // Unlink the old user first
+                    $stmt = $db->prepare("UPDATE users SET member_id = NULL WHERE id = :id");
+                    $stmt->execute(['id' => $existing_user['id']]);
+                }
+            }
+            
+            // Get user's email
+            $stmt = $db->prepare("SELECT email FROM users WHERE id = :user_id");
+            $stmt->execute(['user_id' => $user_id]);
+            $user = $stmt->fetch();
+            $user_email = $user ? $user['email'] : null;
+            
+            // Update user's member_id
+            $stmt = $db->prepare("UPDATE users SET member_id = :member_id WHERE id = :user_id");
+            $stmt->execute([
+                'member_id' => $member_id,
+                'user_id' => $user_id
+            ]);
+            
+            // If linking a member, update the member's email with the user's verified email
+            if ($member_id && $user_email) {
+                $stmt = $db->prepare("UPDATE members SET email = :email WHERE id = :member_id");
+                $stmt->execute([
+                    'email' => $user_email,
+                    'member_id' => $member_id
+                ]);
+            }
+            
+            $_SESSION['success_message'] = "Mitgliederverknüpfung aktualisiert";
+            header('Location: settings.php?tab=users&user_id=' . $user_id);
+            exit;
         } elseif ($action === 'delete' && $_POST['id'] != $_SESSION['user_id']) {
             $id = $_POST['id'];
             $stmt = $db->prepare("DELETE FROM users WHERE id = :id");
@@ -221,7 +264,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'user_detail') {
     }
 
     $user_id = isset($_GET['user_id']) ? (int)$_GET['user_id'] : 0;
-    $stmt = $db->prepare("SELECT id, username, email, first_name, last_name, is_admin, last_login FROM users WHERE id = ? AND active = 1");
+    $stmt = $db->prepare("SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.is_admin, u.last_login, u.member_id,
+                                 m.first_name as member_first_name, m.last_name as member_last_name, m.member_number
+                          FROM users u 
+                          LEFT JOIN members m ON u.member_id = m.id
+                          WHERE u.id = ? AND u.active = 1");
     $stmt->execute([$user_id]);
     $selected_user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -265,6 +312,72 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'user_detail') {
             </div>
         </div>
 
+        <!-- Member Link Section -->
+        <div class="member-link-section" style="margin: 1.5rem 0; padding: 1rem; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #2196f3;">
+            <strong class="section-title" style="display: block; margin-bottom: 1rem; color: #333; font-size: 1rem;">
+                <i class="fas fa-link"></i> Mitgliederverknüpfung
+            </strong>
+            
+            <?php
+            // Get all members for dropdown
+            $stmt = $db->query("SELECT id, first_name, last_name, member_number, active FROM members ORDER BY active DESC, last_name, first_name");
+            $all_members = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            ?>
+            
+            <form method="POST" style="display: flex; flex-direction: column; gap: 1rem;">
+                <input type="hidden" name="section" value="users">
+                <input type="hidden" name="action" value="update_member_link">
+                <input type="hidden" name="user_id" value="<?php echo (int)$selected_user['id']; ?>">
+                
+                <div style="display: flex; align-items: end; gap: 1rem; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 250px;">
+                        <label for="member_id" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: #555;">Verknüpftes Mitglied</label>
+                        <select name="member_id" id="member_id" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.95rem;">
+                            <option value="">Kein Mitglied verknüpft</option>
+                            <?php foreach ($all_members as $member): ?>
+                                <option value="<?php echo $member['id']; ?>" 
+                                        <?php echo ($selected_user['member_id'] == $member['id']) ? 'selected' : ''; ?>
+                                        <?php echo !$member['active'] ? 'style="color: #999;"' : ''; ?>>
+                                    <?php echo htmlspecialchars($member['first_name'] . ' ' . $member['last_name']); ?>
+                                    <?php if ($member['member_number']): ?>
+                                        (<?php echo htmlspecialchars($member['member_number']); ?>)
+                                    <?php endif; ?>
+                                    <?php if (!$member['active']): ?>
+                                        - [Inaktiv]
+                                    <?php endif; ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="padding: 0.5rem 1.5rem;">
+                        <i class="fas fa-save"></i> Speichern
+                    </button>
+                </div>
+                
+                <?php if ($selected_user['member_id']): ?>
+                    <div style="padding: 0.75rem; background: #e8f5e9; border-radius: 4px; border-left: 3px solid #4caf50;">
+                        <i class="fas fa-check-circle" style="color: #4caf50;"></i>
+                        <strong>Verknüpft mit:</strong> 
+                        <?php echo htmlspecialchars($selected_user['member_first_name'] . ' ' . $selected_user['member_last_name']); ?>
+                        <?php if ($selected_user['member_number']): ?>
+                            (Mitgliedsnummer: <?php echo htmlspecialchars($selected_user['member_number']); ?>)
+                        <?php endif; ?>
+                        <a href="member_payments.php?id=<?php echo $selected_user['member_id']; ?>" 
+                           class="btn btn-sm btn-secondary" 
+                           style="margin-left: 1rem; padding: 0.25rem 0.75rem; font-size: 0.85rem;"
+                           target="_blank">
+                            <i class="fas fa-external-link-alt"></i> Zahlungen anzeigen
+                        </a>
+                    </div>
+                <?php else: ?>
+                    <div style="padding: 0.75rem; background: #fff3cd; border-radius: 4px; border-left: 3px solid #ffc107; font-size: 0.9rem; color: #856404;">
+                        <i class="fas fa-info-circle"></i>
+                        <strong>Hinweis:</strong> Dieser Benutzer ist keinem Mitglied zugeordnet.
+                    </div>
+                <?php endif; ?>
+            </form>
+        </div>
+
         <?php if ($selected_user['is_admin']): ?>
             <p class="admin-info">✓ Admin hat automatisch alle Berechtigungen</p>
         <?php else: ?>
@@ -297,6 +410,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'user_detail') {
 
 $page_title = 'Einstellungen';
 include 'includes/header.php';
+
+// Check for session success message
+if (isset($_SESSION['success_message'])) {
+    $success = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
 ?>
 
 <?php if (isset($success)): ?>
@@ -521,7 +640,12 @@ include 'includes/header.php';
     }
     
     // Reload users with is_admin column (include email for display)
-    $stmt = $db->query("SELECT id, username, email, first_name, last_name, is_admin, last_login FROM users WHERE active = 1 ORDER BY username");
+    $stmt = $db->query("SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.is_admin, u.last_login, u.member_id,
+                               m.first_name as member_first_name, m.last_name as member_last_name, m.member_number
+                        FROM users u 
+                        LEFT JOIN members m ON u.member_id = m.id
+                        WHERE u.active = 1 
+                        ORDER BY u.username");
     $all_users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // Determine selected user (from URL or default to first)
@@ -587,6 +711,72 @@ include 'includes/header.php';
                                 <span class="badge badge-success">Aktueller Benutzer</span>
                             <?php endif; ?>
                         </div>
+                    </div>
+
+                    <!-- Member Link Section -->
+                    <div class="member-link-section" style="margin: 1.5rem 0; padding: 1rem; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #2196f3;">
+                        <strong class="section-title" style="display: block; margin-bottom: 1rem; color: #333; font-size: 1rem;">
+                            <i class="fas fa-link"></i> Mitgliederverknüpfung
+                        </strong>
+                        
+                        <?php
+                        // Get all members for dropdown
+                        $stmt = $db->query("SELECT id, first_name, last_name, member_number, active FROM members ORDER BY active DESC, last_name, first_name");
+                        $all_members = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                        ?>
+                        
+                        <form method="POST" style="display: flex; flex-direction: column; gap: 1rem;">
+                            <input type="hidden" name="section" value="users">
+                            <input type="hidden" name="action" value="update_member_link">
+                            <input type="hidden" name="user_id" value="<?php echo (int)$selected_user['id']; ?>">
+                            
+                            <div style="display: flex; align-items: end; gap: 1rem; flex-wrap: wrap;">
+                                <div style="flex: 1; min-width: 250px;">
+                                    <label for="member_id" style="display: block; margin-bottom: 0.5rem; font-weight: 600; color: #555;">Verknüpftes Mitglied</label>
+                                    <select name="member_id" id="member_id" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.95rem;">
+                                        <option value="">Kein Mitglied verknüpft</option>
+                                        <?php foreach ($all_members as $member): ?>
+                                            <option value="<?php echo $member['id']; ?>" 
+                                                    <?php echo ($selected_user['member_id'] == $member['id']) ? 'selected' : ''; ?>
+                                                    <?php echo !$member['active'] ? 'style="color: #999;"' : ''; ?>>
+                                                <?php echo htmlspecialchars($member['first_name'] . ' ' . $member['last_name']); ?>
+                                                <?php if ($member['member_number']): ?>
+                                                    (<?php echo htmlspecialchars($member['member_number']); ?>)
+                                                <?php endif; ?>
+                                                <?php if (!$member['active']): ?>
+                                                    - [Inaktiv]
+                                                <?php endif; ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <button type="submit" class="btn btn-primary" style="padding: 0.5rem 1.5rem;">
+                                    <i class="fas fa-save"></i> Speichern
+                                </button>
+                            </div>
+                            
+                            <?php if ($selected_user['member_id']): ?>
+                                <div style="padding: 0.75rem; background: #e8f5e9; border-radius: 4px; border-left: 3px solid #4caf50;">
+                                    <i class="fas fa-check-circle" style="color: #4caf50;"></i>
+                                    <strong>Verknüpft mit:</strong> 
+                                    <?php echo htmlspecialchars($selected_user['member_first_name'] . ' ' . $selected_user['member_last_name']); ?>
+                                    <?php if ($selected_user['member_number']): ?>
+                                        (Mitgliedsnummer: <?php echo htmlspecialchars($selected_user['member_number']); ?>)
+                                    <?php endif; ?>
+                                    <a href="member_payments.php?id=<?php echo $selected_user['member_id']; ?>" 
+                                       class="btn btn-sm btn-secondary" 
+                                       style="margin-left: 1rem; padding: 0.25rem 0.75rem; font-size: 0.85rem;"
+                                       target="_blank">
+                                        <i class="fas fa-external-link-alt"></i> Zahlungen anzeigen
+                                    </a>
+                                </div>
+                            <?php else: ?>
+                                <div style="padding: 0.75rem; background: #fff3cd; border-radius: 4px; border-left: 3px solid #ffc107; font-size: 0.9rem; color: #856404;">
+                                    <i class="fas fa-info-circle"></i>
+                                    <strong>Hinweis:</strong> Dieser Benutzer ist keinem Mitglied zugeordnet.
+                                </div>
+                            <?php endif; ?>
+                        </form>
                     </div>
 
                     <?php if ($selected_user['is_admin']): ?>

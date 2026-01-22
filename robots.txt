@@ -1,0 +1,23 @@
+# robots.txt for Freiwillige Feuerwehr Meinern-Mittelstendorf
+# Guides search engines on how to crawl and index the site
+
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /config/
+Disallow: /database/
+Disallow: /includes/
+Disallow: /.git/
+Disallow: /.config/
+Disallow: /logs/
+Disallow: /.htaccess
+Disallow: /*?*sort=
+Disallow: /*?*page=*&sort=
+Disallow: /verify_magiclink.php
+Disallow: /verify_registration.php
+
+# Crawl-delay
+Crawl-delay: 5
+
+# Sitemap location (dynamically generated)
+Sitemap: https://owmm.de/sitemap.php
