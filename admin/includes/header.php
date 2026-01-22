@@ -75,7 +75,7 @@
                     <i class="fas fa-box"></i> Artikel
                 </a>
                 <a href="outstanding_obligations.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'outstanding_obligations.php' || basename($_SERVER['PHP_SELF']) == 'create_item_obligation.php' || basename($_SERVER['PHP_SELF']) == 'view_item_obligation.php' ? 'active' : ''; ?>">
-                    <i class="fas fa-link"></i> Artikelverpflichtungen
+                    <i class="fas fa-link"></i> Offene Forderungen
                 </a>
                 <?php endif; ?>
                 

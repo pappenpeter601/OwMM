@@ -40,6 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'email' => !empty($_POST['email']) ? $_POST['email'] : null,
                     'telephone' => !empty($_POST['telephone']) ? $_POST['telephone'] : null,
                     'mobile' => !empty($_POST['mobile']) ? $_POST['mobile'] : null,
+                    'iban' => !empty($_POST['iban']) ? $_POST['iban'] : null,
                     'member_number' => !empty($_POST['member_number']) ? $_POST['member_number'] : null,
                     'join_date' => !empty($_POST['join_date']) ? $_POST['join_date'] : null,
                     'active' => isset($_POST['active']) ? 1 : 0,
@@ -60,6 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 email = :email,
                                 telephone = :telephone,
                                 mobile = :mobile,
+                                iban = :iban,
                                 member_number = :member_number,
                                 join_date = :join_date,
                                 active = :active,
@@ -68,21 +70,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $data['id'] = $id;
                         $stmt = $db->prepare($sql);
                         $stmt->execute($data);
+                        
+                        // Return JSON for AJAX requests
+                        if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
+                            echo json_encode(['success' => true, 'message' => 'Mitglied erfolgreich aktualisiert.']);
+                            exit;
+                        }
                         $_SESSION['success_message'] = 'Mitglied erfolgreich aktualisiert.';
                     } else {
                         // Insert new member
                         $sql = "INSERT INTO members (member_type, salutation, first_name, last_name, street, postal_code, city, 
-                                email, telephone, mobile, member_number, join_date, active, notes)
+                                email, telephone, mobile, iban, member_number, join_date, active, notes)
                                 VALUES (:member_type, :salutation, :first_name, :last_name, :street, :postal_code, :city, 
-                                :email, :telephone, :mobile, :member_number, :join_date, :active, :notes)";
+                                :email, :telephone, :mobile, :iban, :member_number, :join_date, :active, :notes)";
                         $stmt = $db->prepare($sql);
                         $stmt->execute($data);
+                        
+                        // Return JSON for AJAX requests
+                        if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
+                            echo json_encode(['success' => true, 'message' => 'Mitglied erfolgreich hinzugefügt.']);
+                            exit;
+                        }
                         $_SESSION['success_message'] = 'Mitglied erfolgreich hinzugefügt.';
                     }
+                    // For non-AJAX, redirect
                     header('Location: members.php');
                     exit;
                 } catch (PDOException $e) {
-                    $error = 'Fehler beim Speichern: ' . $e->getMessage();
+                    // Return JSON error for AJAX requests
+                    if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
+                        echo json_encode(['success' => false, 'message' => 'Fehler beim Speichern: ' . $e->getMessage()]);
+                        exit;
+                    }
+                    $_SESSION['error_message'] = 'Fehler beim Speichern: ' . $e->getMessage();
+                    header('Location: members.php');
+                    exit;
                 }
                 break;
                 
@@ -118,25 +140,29 @@ $filter_type = $_GET['type'] ?? 'all';
 $search = $_GET['search'] ?? '';
 
 // Build query
-$sql = "SELECT * FROM members WHERE 1=1";
+$sql = "SELECT m.*, 
+               u.id as linked_user_id, u.email as user_email
+        FROM members m
+        LEFT JOIN users u ON u.member_id = m.id
+        WHERE 1=1";
 $params = [];
 
 if ($filter_type !== 'all') {
-    $sql .= " AND member_type = ?";
+    $sql .= " AND m.member_type = ?";
     $params[] = $filter_type;
 }
 
 if ($search) {
     // Use positional parameters for the search
     $search_term = '%' . $search . '%';
-    $sql .= " AND (first_name LIKE ? OR last_name LIKE ? OR member_number LIKE ? OR email LIKE ?)";
+    $sql .= " AND (m.first_name LIKE ? OR m.last_name LIKE ? OR m.member_number LIKE ? OR m.email LIKE ?)";
     $params[] = $search_term;
     $params[] = $search_term;
     $params[] = $search_term;
     $params[] = $search_term;
 }
 
-$sql .= " ORDER BY active DESC, last_name, first_name";
+$sql .= " ORDER BY m.active DESC, m.last_name, m.first_name";
 
 $stmt = $db->prepare($sql);
 
@@ -236,36 +262,61 @@ include 'includes/header.php';
     </div>
 </div>
 
-<!-- Filters -->
-<div class="filters-bar">
-    <form method="GET" class="filters-form">
-        <div class="filter-group">
-            <label>Typ:</label>
-            <select name="type" onchange="this.form.submit()">
-                <option value="all" <?= $filter_type === 'all' ? 'selected' : '' ?>>Alle</option>
-                <option value="active" <?= $filter_type === 'active' ? 'selected' : '' ?>>Einsatzeinheit</option>
-                <option value="supporter" <?= $filter_type === 'supporter' ? 'selected' : '' ?>>Förderer</option>
-                <option value="pensioner" <?= $filter_type === 'pensioner' ? 'selected' : '' ?>>Altersabteilung</option>
-            </select>
+<!-- Filter Section -->
+<div class="section-card">
+    <h2>Filter</h2>
+    <form method="GET" class="filter-form" style="display: flex; flex-direction: column; gap: 0.75rem;">
+        <!-- Row 1: Type filter -->
+        <div class="filter-row" style="display: flex; flex-wrap: wrap; gap: 1rem; width: 100%;">
+            <div class="form-group">
+                <label for="type">Mitgliedertyp</label>
+                <select id="type" name="type">
+                    <option value="all" <?= $filter_type === 'all' ? 'selected' : '' ?>>Alle Typen</option>
+                    <option value="active" <?= $filter_type === 'active' ? 'selected' : '' ?>>Einsatzeinheit</option>
+                    <option value="supporter" <?= $filter_type === 'supporter' ? 'selected' : '' ?>>Förderer</option>
+                    <option value="pensioner" <?= $filter_type === 'pensioner' ? 'selected' : '' ?>>Altersabteilung</option>
+                </select>
+            </div>
         </div>
         
-        <div class="filter-group">
-            <label>Suche:</label>
-            <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" 
-                   placeholder="Name, Nummer, E-Mail...">
+        <!-- Row 2: Search -->
+        <div class="filter-row" style="display: flex; flex-wrap: wrap; gap: 1rem; width: 100%;">
+            <div class="form-group" style="min-width: 280px; flex: 1 1 100%;">
+                <label for="search">Suche</label>
+                <input type="text" id="search" name="search" value="<?= htmlspecialchars($search) ?>" 
+                       placeholder="Name, Mitgliedsnummer, E-Mail..." style="width: 100%;">
+            </div>
         </div>
         
-        <button type="submit" class="btn btn-secondary">
-            <i class="fas fa-search"></i> Filtern
-        </button>
-        
-        <?php if ($filter_type !== 'all' || $search): ?>
-            <a href="members.php" class="btn btn-secondary">
-                <i class="fas fa-times"></i> Zurücksetzen
-            </a>
-        <?php endif; ?>
+        <!-- Row 3: Buttons -->
+        <div class="filter-row" style="display: flex; justify-content: flex-end; gap: 0.5rem; width: 100%;">
+            <button type="submit" class="btn btn-secondary">Filtern</button>
+            <a href="members.php" class="btn btn-secondary">Zurücksetzen</a>
+        </div>
     </form>
 </div>
+
+<?php 
+// Build active filter hints for UI
+$active_filters = [];
+if ($filter_type !== 'all') {
+    $type_labels = [
+        'active' => 'Einsatzeinheit',
+        'supporter' => 'Förderer',
+        'pensioner' => 'Altersabteilung'
+    ];
+    $active_filters[] = 'Typ: ' . ($type_labels[$filter_type] ?? $filter_type);
+}
+if ($search !== '') {
+    $active_filters[] = 'Suche: "' . $search . '"';
+}
+?>
+
+<?php if (!empty($active_filters)): ?>
+<div class="alert" style="background-color: #e8f4fd; color: #0b4f7d; border-left: 4px solid #1976d2; margin-top: 0.5rem;">
+    Aktive Filter: <?= htmlspecialchars(implode(' · ', $active_filters)) ?>
+</div>
+<?php endif; ?>
 
 <!-- Members Table -->
 <div class="table-container">
@@ -361,7 +412,7 @@ include 'includes/header.php';
             <h2 id="modalTitle">Neues Mitglied</h2>
             <span class="close" onclick="closeModal()">&times;</span>
         </div>
-        <form method="POST" id="memberForm">
+        <form method="POST" id="memberForm" onsubmit="saveMember(event)">
             <input type="hidden" name="action" id="formAction" value="add">
             <input type="hidden" name="id" id="memberId">
             
@@ -436,7 +487,10 @@ include 'includes/header.php';
                     
                     <div class="form-group">
                         <label>E-Mail:</label>
-                        <input type="email" name="email">
+                        <input type="email" name="email" id="emailField">
+                        <small id="emailHint" style="color: #d32f2f; display: none; margin-top: 0.5rem; font-weight: 600;">
+                            <i class="fas fa-lock"></i> E-Mail wird durch verknüpften Benutzer verwaltet
+                        </small>
                     </div>
                     
                     <div class="form-group">
@@ -447,6 +501,11 @@ include 'includes/header.php';
                     <div class="form-group">
                         <label>Mobil:</label>
                         <input type="text" name="mobile">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>IBAN:</label>
+                        <input type="text" name="iban" placeholder="DE89 3704 0044 0532 0130 00" maxlength="34">
                     </div>
                     
                     <div class="form-group">
@@ -566,12 +625,85 @@ function editMember(member) {
     document.querySelector('[name="email"]').value = member.email || '';
     document.querySelector('[name="telephone"]').value = member.telephone || '';
     document.querySelector('[name="mobile"]').value = member.mobile || '';
+    document.querySelector('[name="iban"]').value = member.iban || '';
     document.querySelector('[name="member_number"]').value = member.member_number || '';
     document.querySelector('[name="join_date"]').value = member.join_date || '';
     document.querySelector('[name="active"]').checked = member.active == 1;
     document.querySelector('[name="notes"]').value = member.notes || '';
     
+    // Make email field read-only if linked to a user
+    const emailField = document.getElementById('emailField');
+    const emailHint = document.getElementById('emailHint');
+    if (member.linked_user_id) {
+        emailField.readOnly = true;
+        emailField.style.backgroundColor = '#f5f5f5';
+        emailField.style.cursor = 'not-allowed';
+        emailHint.style.display = 'block';
+    } else {
+        emailField.readOnly = false;
+        emailField.style.backgroundColor = '';
+        emailField.style.cursor = '';
+        emailHint.style.display = 'none';
+    }
+    
     document.getElementById('memberModal').style.display = 'flex';
+}
+
+function saveMember(event) {
+    event.preventDefault();
+    
+    const form = document.getElementById('memberForm');
+    const formData = new FormData(form);
+    const submitButton = form.querySelector('button[type="submit"]');
+    
+    // Disable submit button
+    submitButton.disabled = true;
+    submitButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Speichern...';
+    
+    fetch('members.php', {
+        method: 'POST',
+        headers: {
+            'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Close modal
+            closeModal();
+            
+            // Show success message
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'alert alert-success';
+            alertDiv.textContent = data.message;
+            alertDiv.style.animation = 'fadeIn 0.3s';
+            
+            const contentHeader = document.querySelector('.content-header');
+            contentHeader.parentNode.insertBefore(alertDiv, contentHeader.nextSibling);
+            
+            // Auto-remove alert after 3 seconds
+            setTimeout(() => {
+                alertDiv.style.animation = 'fadeOut 0.3s';
+                setTimeout(() => alertDiv.remove(), 300);
+            }, 3000);
+            
+            // Reload page to show updated data
+            setTimeout(() => location.reload(), 500);
+        } else {
+            // Re-enable submit button
+            submitButton.disabled = false;
+            submitButton.innerHTML = 'Speichern';
+            
+            alert(data.message || 'Fehler beim Speichern. Bitte versuchen Sie es erneut.');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        submitButton.disabled = false;
+        submitButton.innerHTML = 'Speichern';
+        alert('Fehler beim Speichern. Bitte versuchen Sie es erneut.');
+    });
 }
 
 function closeModal() {

@@ -185,7 +185,7 @@ $perm_details = [
     'members.php' => ['icon' => '👤', 'title' => 'Mitglieder', 'desc' => 'Mitgliederverwaltung und Beiträge', 'url' => 'members.php'],
     'generate_obligations.php' => ['icon' => '📋', 'title' => 'Beitragsforderungen', 'desc' => 'Jahresbeiträge generieren und verwalten', 'url' => 'generate_obligations.php'],
     'items.php' => ['icon' => '📦', 'title' => 'Artikel', 'desc' => 'Artikel und Gegenstände verwalten', 'url' => 'items.php'],
-    'outstanding_obligations.php' => ['icon' => '🔗', 'title' => 'Artikelverpflichtungen', 'desc' => 'Artikel-Verpflichtungen erstellen und verwalten', 'url' => 'outstanding_obligations.php'],
+    'outstanding_obligations.php' => ['icon' => '🔗', 'title' => 'Offene Forderungen', 'desc' => 'Mitgliedsbeiträge und Artikel-Verpflichtungen verwalten', 'url' => 'outstanding_obligations.php'],
     'calendar.php' => ['icon' => '📆', 'title' => 'Kalender', 'desc' => 'Gemeinsamen Kalender verwalten', 'url' => 'calendar.php'],
     'check_periods.php' => ['icon' => '✅', 'title' => 'Prüfperioden', 'desc' => 'Kassenprüfung nach Perioden durchführen', 'url' => 'check_periods.php'],
 ];

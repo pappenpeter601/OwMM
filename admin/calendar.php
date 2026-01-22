@@ -22,9 +22,17 @@ if (!$cfg) {
 }
 
 $base = rtrim($cfg['base_url'], '/');
-$collection = $base . '/' . ltrim($cfg['calendar_path'], '/');
+$calendar_path = $cfg['calendar_path'];
+// If calendar_path starts with /, remove it since we're adding it back
+$calendar_path = ltrim($calendar_path, '/');
+$collection = $base . '/' . $calendar_path;
 $user = $cfg['username'];
 $pass = b64d($cfg['password']);
+
+// Debug: Log the constructed collection URL
+error_log("DEBUG calendar.php: base_url = " . $cfg['base_url']);
+error_log("DEBUG calendar.php: calendar_path = " . $cfg['calendar_path']);
+error_log("DEBUG calendar.php: collection = " . $collection);
 
 // Helpers for CalDAV
 function dav_request($method, $url, $user, $pass, $headers = [], $body = null) {
@@ -70,7 +78,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
                 ($location? "LOCATION:".str_replace("\n"," ",$location)."\n":"").
                 ($description? "DESCRIPTION:".str_replace(["\n","\r"],['\\n',''], $description)."\n":"").
                 "END:VEVENT\nEND:VCALENDAR\n";
-        $objectUrl = $collection . $uid . '.ics';
+        $objectUrl = rtrim($collection, '/') . '/' . $uid . '.ics';
+        error_log("DEBUG calendar.php: Creating event at URL: " . $objectUrl);
         [$status, $resp, $err] = dav_request('PUT', $objectUrl, $user, $pass, [
             'Content-Type: text/calendar; charset=utf-8'
         ], $ical);

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `is_admin` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Admin users automatically have all permissions',
   `first_name` varchar(50) DEFAULT NULL,
   `last_name` varchar(50) DEFAULT NULL,
+  `member_id` int(11) DEFAULT NULL COMMENT 'Optional link to members table',
   `active` tinyint(1) NOT NULL DEFAULT 1,
   `auth_method` enum('password','magic_link','both') NOT NULL DEFAULT 'both' COMMENT 'Preferred authentication method',
   `email_verified` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Email verification status',
@@ -21,7 +22,9 @@ CREATE TABLE IF NOT EXISTS `users` (
   `last_login` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `username` (`username`),
-  UNIQUE KEY `email` (`email`)
+  UNIQUE KEY `email` (`email`),
+  UNIQUE KEY `unique_member_id` (`member_id`),
+  KEY `idx_users_member_id` (`member_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Email configuration table (stores SMTP settings)
@@ -429,6 +432,7 @@ CREATE TABLE IF NOT EXISTS `members` (
   `email` varchar(100) DEFAULT NULL,
   `telephone` varchar(20) DEFAULT NULL,
   `mobile` varchar(20) DEFAULT NULL,
+  `iban` varchar(34) DEFAULT NULL COMMENT 'International Bank Account Number',
   `join_date` date DEFAULT NULL,
   `end_date` date DEFAULT NULL COMMENT 'Date when member left/became inactive',
   `active` tinyint(1) NOT NULL DEFAULT 1,
@@ -446,6 +450,10 @@ CREATE TABLE IF NOT EXISTS `members` (
   KEY `is_board_member` (`is_board_member`),
   KEY `last_name` (`last_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Add foreign key constraint for users to members (optional link)
+ALTER TABLE `users`
+  ADD CONSTRAINT `users_member_fk` FOREIGN KEY (`member_id`) REFERENCES `members` (`id`) ON DELETE SET NULL;
 
 -- Membership fees (with validity periods)
 CREATE TABLE IF NOT EXISTS `membership_fees` (
@@ -508,6 +516,27 @@ CREATE TABLE IF NOT EXISTS `member_payments` (
   CONSTRAINT `member_payments_ibfk_3` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Item obligation payments (links transactions to item obligations)
+CREATE TABLE IF NOT EXISTS `item_obligation_payments` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `obligation_id` int(11) NOT NULL COMMENT 'Item obligation this payment reduces',
+  `transaction_id` int(11) DEFAULT NULL COMMENT 'Optional link to transaction from cash management',
+  `payment_date` date NOT NULL,
+  `amount` decimal(10,2) NOT NULL,
+  `payment_method` varchar(50) DEFAULT NULL,
+  `notes` text,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `obligation_id` (`obligation_id`),
+  KEY `transaction_id` (`transaction_id`),
+  KEY `payment_date` (`payment_date`),
+  KEY `created_by` (`created_by`),
+  CONSTRAINT `item_obligation_payments_ibfk_1` FOREIGN KEY (`obligation_id`) REFERENCES `item_obligations` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `item_obligation_payments_ibfk_2` FOREIGN KEY (`transaction_id`) REFERENCES `transactions` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `item_obligation_payments_ibfk_3` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Insert default admin user (password: admin123 - CHANGE THIS!)
 INSERT INTO `users` (`username`, `email`, `password`, `is_admin`, `first_name`, `last_name`, `email_verified`) VALUES
 ('admin', 'admin@example.com', '$2y$10$Q508QQp7rNEJLQXGlnmC2.uzCUmjeVW6PNNANDRzHmzl/9Okger9y', 1, 'Admin', 'User', 1);
@@ -567,7 +596,7 @@ INSERT INTO `permissions` (`name`, `display_name`, `description`, `category`) VA
 ('members.php', 'Mitglieder', 'Mitglieder verwalten', 'Basic'),
 ('generate_obligations.php', 'Beitragsforderungen', 'Beiträge generieren', 'Finanzen'),
 ('items.php', 'Artikel', 'Artikel verwalten', 'Basic'),
-('outstanding_obligations.php', 'Artikelverpflichtungen', 'Artikelverpflichtungen verwalten', 'Finanzen'),
+('outstanding_obligations.php', 'Offene Forderungen', 'Offene Forderungen verwalten', 'Finanzen'),
 ('selfservice.php', 'Self-Service', 'Zugriff auf Organisationsdaten', 'Basic'),
 ('calendar.php', 'Kalender', 'Gemeinsamen Kalender verwalten', 'Basic');
 
