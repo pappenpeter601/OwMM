@@ -400,6 +400,9 @@ if ($search !== '') {
                     <button class="btn btn-secondary" onclick="exportCSV()">
                         <i class="fas fa-download"></i> Als CSV exportieren
                     </button>
+                    <button class="btn btn-secondary" onclick="copyNamesToClipboard(this)">
+                        <i class="fas fa-copy"></i> Namen kopieren
+                    </button>
                 </div>
             <?php endif; ?>
         
@@ -604,6 +607,41 @@ function exportCSV() {
     link.href = URL.createObjectURL(blob);
     link.download = 'forderungen.csv';
     link.click();
+}
+
+function copyNamesToClipboard(button) {
+    const table = document.querySelector('.data-table');
+    const rows = table.querySelectorAll('tbody tr');
+    let names = [];
+    
+    rows.forEach(row => {
+        // Get the name from the second column (index 1)
+        const nameCell = row.querySelector('td:nth-child(2)');
+        if (nameCell) {
+            // Extract just the name without extra whitespace/formatting
+            const name = nameCell.querySelector('strong')?.innerText || nameCell.innerText;
+            if (name) {
+                names.push(name.trim());
+            }
+        }
+    });
+    
+    const namesText = names.join('\n');
+    
+    // Copy to clipboard
+    navigator.clipboard.writeText(namesText).then(() => {
+        // Show success message
+        const originalText = button.innerHTML;
+        button.innerHTML = '<i class="fas fa-check"></i> Kopiert!';
+        button.classList.add('btn-success');
+        
+        setTimeout(() => {
+            button.innerHTML = originalText;
+            button.classList.remove('btn-success');
+        }, 2000);
+    }).catch(err => {
+        alert('Fehler beim Kopieren: ' + err);
+    });
 }
 </script>
 

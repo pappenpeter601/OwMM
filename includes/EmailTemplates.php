@@ -299,13 +299,14 @@ class EmailTemplates {
         $contactMobile = htmlspecialchars($contactPerson['mobile'] ?? '', ENT_QUOTES, 'UTF-8');
         $contactLines = '';
         if ($contactEmail || $contactMobile) {
-            $contactLines .= '<br><strong>Kontakt:</strong> ' . $contactName;
+            $contactLines = '<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e0e0e0; font-size: 15px; color: #666;"><strong>Kontakt:</strong> ' . $contactName;
             if ($contactMobile) {
                 $contactLines .= ' | Mobil: ' . $contactMobile;
             }
             if ($contactEmail) {
                 $contactLines .= ' | E-Mail: ' . $contactEmail;
             }
+            $contactLines .= '</div>';
         }
         
         $content = '
@@ -372,6 +373,16 @@ class EmailTemplates {
                 </div>
             </div>
             
+            <div style="background-color: #dbeafe; border-radius: 8px; padding: 20px; margin: 25px 0; border-left: 4px solid #0ea5e9;">
+                <h3 style="margin-top: 0; color: #0369a1; font-size: 16px;">🌐 Digitale Kommunikation</h3>
+                <p style="margin: 10px 0; font-size: 15px; color: #333; line-height: 1.6;">
+                    Registriere dich auf <a href="https://owmm.de/register.php" style="color: #0ea5e9; text-decoration: underline;">https://owmm.de/register.php</a> für digitale Kommunikation.
+                </p>
+                <p style="margin: 10px 0; font-size: 15px; color: #333; line-height: 1.6;">
+                    Nach der Registrierung erhältst du alle Informationen per E-Mail und kannst deine Daten selbst verwalten.
+                </p>
+            </div>
+            
             <p style="font-size: 16px; color: #333; line-height: 1.6; margin-top: 25px;">
                 Bei Fragen oder Problemen melde dich gern direkt bei uns!' . $contactLines . '
             </p>
@@ -418,13 +429,14 @@ class EmailTemplates {
         $contactMobile = htmlspecialchars($contactPerson['mobile'] ?? '', ENT_QUOTES, 'UTF-8');
         $contactLines = '';
         if ($contactEmail || $contactMobile) {
-            $contactLines .= '<br><strong>Kontakt:</strong> ' . $contactName;
+            $contactLines = '<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e0e0e0; font-size: 15px; color: #666;"><strong>Kontakt:</strong> ' . $contactName;
             if ($contactMobile) {
                 $contactLines .= ' | Mobil: ' . $contactMobile;
             }
             if ($contactEmail) {
                 $contactLines .= ' | E-Mail: ' . $contactEmail;
             }
+            $contactLines .= '</div>';
         }
         
         // Build informal salutation (Du) and map Herr/Frau to Lieber/Liebe
@@ -510,6 +522,16 @@ class EmailTemplates {
                     </div>
                     ' . ($qrCodeUrl ? '<div style="text-align: center;"><img src="' . htmlspecialchars($qrCodeUrl, ENT_QUOTES, 'UTF-8') . '" alt="PayPal QR-Code" style="width: 100px; height: 100px; border: 2px solid #f59e0b; border-radius: 4px;"></div>' : '') . '
                 </div>
+            </div>
+            
+            <div style="background-color: #dbeafe; border-radius: 8px; padding: 20px; margin: 25px 0; border-left: 4px solid #0ea5e9;">
+                <h3 style="margin-top: 0; color: #0369a1; font-size: 16px;">🌐 Digitale Kommunikation</h3>
+                <p style="margin: 10px 0; font-size: 15px; color: #333; line-height: 1.6;">
+                    Registriere dich auf <a href="https://owmm.de/register.php" style="color: #0ea5e9; text-decoration: underline;">https://owmm.de/register.php</a> für digitale Kommunikation.
+                </p>
+                <p style="margin: 10px 0; font-size: 15px; color: #333; line-height: 1.6;">
+                    Nach der Registrierung erhältst du alle Informationen per E-Mail und kannst deine Daten selbst verwalten.
+                </p>
             </div>
             
             <p style="font-size: 16px; color: #333; line-height: 1.6; margin-top: 25px;">

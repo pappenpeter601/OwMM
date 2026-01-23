@@ -469,13 +469,16 @@ include 'includes/header.php';
             </div>
             
             <!-- Selection Controls -->
-            <div style="margin: 15px 0; display: flex; gap: 15px; align-items: center;">
+            <div style="margin: 15px 0; display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
                 <label style="margin: 0; cursor: pointer;">
                     <input type="checkbox" id="selectAll" onclick="toggleAll(this)"> 
                     <strong>Alle auswählen</strong>
                 </label>
                 <button type="button" class="btn btn-secondary btn-sm" onclick="selectOnlyWithEmail()">
                     <i class="fas fa-envelope"></i> Nur mit E-Mail
+                </button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="selectOnlyWithoutEmail()">
+                    <i class="fas fa-print"></i> Nur ohne E-Mail (zum Drucken)
                 </button>
                 <span id="selectionCount" style="color: #666; margin-left: auto;">
                     0 ausgewählt
@@ -547,7 +550,10 @@ include 'includes/header.php';
             </div>
             
             <!-- Send Button -->
-            <div style="margin-top: 20px; text-align: center;">
+            <div style="margin-top: 20px; text-align: center; display: flex; gap: 15px; justify-content: center;">
+                <button type="button" class="btn btn-secondary btn-large" onclick="printLetters()" id="printButton" disabled>
+                    <i class="fas fa-print"></i> Briefe drucken
+                </button>
                 <button type="button" class="btn btn-primary btn-large" onclick="showPreview()" id="previewButton" disabled>
                     <i class="fas fa-eye"></i> Vorschau & Versenden
                 </button>
@@ -682,13 +688,45 @@ function selectOnlyWithEmail() {
     updateSelectionCount();
 }
 
+function selectOnlyWithoutEmail() {
+    const checkboxes = document.querySelectorAll('.member-checkbox');
+    checkboxes.forEach(cb => {
+        cb.checked = cb.dataset.hasEmail === '0';
+    });
+    document.getElementById('selectAll').checked = false;
+    updateSelectionCount();
+}
+
 function updateSelectionCount() {
     const checked = document.querySelectorAll('.member-checkbox:checked');
     const count = checked.length;
     const contactSelected = document.getElementById('contact_member_id').value !== '';
+    const hasWithEmail = Array.from(checked).some(cb => cb.dataset.hasEmail === '1');
+    const hasWithoutEmail = Array.from(checked).some(cb => cb.dataset.hasEmail === '0');
     
     document.getElementById('selectionCount').textContent = count + ' ausgewählt';
-    document.getElementById('previewButton').disabled = count === 0 || !contactSelected;
+    document.getElementById('previewButton').disabled = count === 0 || !contactSelected || !hasWithEmail;
+    document.getElementById('printButton').disabled = count === 0 || !contactSelected || !hasWithoutEmail;
+}
+
+// Print letters function
+function printLetters() {
+    const checked = Array.from(document.querySelectorAll('.member-checkbox:checked'));
+    const obligationIds = checked.map(cb => cb.value).join(',');
+    const contactMemberId = document.getElementById('contact_member_id').value;
+    
+    if (!obligationIds) {
+        alert('Bitte wählen Sie mindestens ein Mitglied aus.');
+        return;
+    }
+    
+    if (!contactMemberId) {
+        alert('Bitte wählen Sie einen Ansprechpartner aus.');
+        return;
+    }
+    
+    // Open print view in new tab
+    window.open('print_payment_letters.php?ids=' + obligationIds + '&contact=' + contactMemberId, '_blank');
 }
 
 // Preview modal
