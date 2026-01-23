@@ -4,7 +4,7 @@
         <div class="container">
             <div class="footer-grid">
                 <div class="footer-section">
-                    <h3><?php echo SITE_NAME; ?></h3>
+                    <h3><?php echo get_org_setting('site_name'); ?></h3>
                     <p>Rund um die Uhr für Ihre Sicherheit im Einsatz.</p>
                     <div class="emergency-number">
                         <i class="fas fa-phone-alt"></i>
@@ -47,7 +47,7 @@
             </div>
             
             <div class="footer-bottom">
-                <p>&copy; <?php echo date('Y'); ?> <?php echo SITE_NAME; ?>. Alle Rechte vorbehalten.</p>
+                <p>&copy; <?php echo date('Y'); ?> <?php echo get_org_setting('site_name'); ?>. Alle Rechte vorbehalten.</p>
                 <p><a href="admin/login.php">Admin-Bereich</a></p>
             </div>
         </div>

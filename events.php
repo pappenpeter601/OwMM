@@ -3,7 +3,7 @@ require_once 'config/config.php';
 require_once 'config/database.php';
 require_once 'includes/functions.php';
 
-$page_title = 'Veranstaltungen - ' . SITE_NAME;
+$page_title = 'Veranstaltungen - ' . get_org_setting('site_name');
 
 // Get upcoming and past events
 $upcoming_events = get_events('upcoming');

@@ -3,7 +3,7 @@ require_once 'config/config.php';
 require_once 'config/database.php';
 require_once 'includes/functions.php';
 
-$page_title = 'Kontakt - ' . SITE_NAME;
+$page_title = 'Kontakt - ' . get_org_setting('site_name');
 
 $success = false;
 $error = '';
@@ -43,7 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $email_message .= "Betreff: $subject\n\n";
         $email_message .= "Nachricht:\n$message\n";
         
-        send_email(ADMIN_EMAIL, "Neue Kontaktanfrage: $subject", $email_message);
+        send_email(get_org_setting('admin_email'), "Neue Kontaktanfrage: $subject", $email_message);
         
         $success = true;
     }
@@ -85,7 +85,7 @@ include 'includes/header.php';
                     <i class="fas fa-envelope"></i>
                     <div>
                         <h4>E-Mail</h4>
-                        <p><a href="mailto:<?php echo ADMIN_EMAIL; ?>"><?php echo ADMIN_EMAIL; ?></a></p>
+                        <p><a href="mailto:<?php echo get_org_setting('admin_email'); ?>"><?php echo get_org_setting('admin_email'); ?></a></p>
                     </div>
                 </div>
                 

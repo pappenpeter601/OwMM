@@ -6,7 +6,7 @@
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     
     <!-- SEO Meta Tags -->
-    <title><?php echo isset($page_title) ? $page_title . ' | ' . SITE_NAME : SITE_NAME . ' - Freiwillige Feuerwehr Meinern-Mittelstendorf'; ?></title>
+    <title><?php echo isset($page_title) ? $page_title . ' | ' . get_org_setting('site_name') : get_org_setting('site_name') . ' - Freiwillige Feuerwehr Meinern-Mittelstendorf'; ?></title>
     <meta name="description" content="<?php echo isset($page_description) ? $page_description : 'Freiwillige Feuerwehr Meinern-Mittelstendorf (OWMM) - Einsatzberichte, Übungen, Veranstaltungen und Informationen über unsere Feuerwehr.'; ?>">
     <meta name="keywords" content="Feuerwehr, Meinern, Mittelstendorf, OWMM, Einsätze, Rettung, Löschzug, Technische Hilfe">
     <meta name="author" content="Freiwillige Feuerwehr Meinern-Mittelstendorf">
@@ -16,14 +16,14 @@
     
     <!-- Open Graph / Social Media -->
     <meta property="og:type" content="website">
-    <meta property="og:url" content="<?php echo SITE_URL . $_SERVER['REQUEST_URI']; ?>">
-    <meta property="og:title" content="<?php echo isset($page_title) ? $page_title . ' | ' . SITE_NAME : SITE_NAME; ?>">
+    <meta property="og:url" content="<?php echo get_org_setting('site_url') . $_SERVER['REQUEST_URI']; ?>">
+    <meta property="og:title" content="<?php echo isset($page_title) ? $page_title . ' | ' . get_org_setting('site_name') : get_org_setting('site_name'); ?>">
     <meta property="og:description" content="<?php echo isset($page_description) ? $page_description : 'Freiwillige Feuerwehr Meinern-Mittelstendorf - Einsatzberichte, Übungen und Events'; ?>">
     <meta property="og:locale" content="de_DE">
-    <meta property="og:site_name" content="<?php echo SITE_NAME; ?>">
+    <meta property="og:site_name" content="<?php echo get_org_setting('site_name'); ?>">
     
     <!-- Canonical URL -->
-    <link rel="canonical" href="<?php echo SITE_URL . strtok($_SERVER['REQUEST_URI'], '?'); ?>">
+    <link rel="canonical" href="<?php echo get_org_setting('site_url') . strtok($_SERVER['REQUEST_URI'], '?'); ?>">
     
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
@@ -37,13 +37,13 @@
     {
       "@context": "https://schema.org",
       "@type": "Organization",
-      "name": "<?php echo SITE_NAME; ?>",
+      "name": "<?php echo get_org_setting('site_name'); ?>",
       "description": "Freiwillige Feuerwehr Meinern-Mittelstendorf",
-      "url": "<?php echo SITE_URL; ?>",
-      "logo": "<?php echo SITE_URL; ?>/favicon.svg",
+      "url": "<?php echo get_org_setting('site_url'); ?>",
+      "logo": "<?php echo get_org_setting('site_url'); ?>/favicon.svg",
       "contactPoint": {
         "@type": "ContactPoint",
-        "email": "<?php echo ADMIN_EMAIL; ?>",
+        "email": "<?php echo get_org_setting('admin_email'); ?>",
         "contactType": "customer service",
         "availableLanguage": ["German"]
       },
@@ -59,7 +59,7 @@
         <div class="header-top">
             <div class="container">
                 <div class="nav-brand">
-                    <a href="index.php"><?php echo SITE_NAME; ?></a>
+                    <a href="index.php"><?php echo get_org_setting('site_name'); ?></a>
                 </div>
                 
                 <button class="nav-toggle" id="navToggle">

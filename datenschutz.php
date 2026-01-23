@@ -3,7 +3,7 @@ require_once 'config/config.php';
 require_once 'config/database.php';
 require_once 'includes/functions.php';
 
-$page_title = 'Datenschutzerklärung - ' . SITE_NAME;
+$page_title = 'Datenschutzerklärung - ' . get_org_setting('site_name');
 
 include 'includes/header.php';
 ?>
@@ -50,10 +50,10 @@ include 'includes/header.php';
             <h3>Hinweis zur verantwortlichen Stelle</h3>
             <p>
                 Die verantwortliche Stelle für die Datenverarbeitung auf dieser Website ist:<br><br>
-                <?php echo SITE_NAME; ?><br>
+                <?php echo get_org_setting('site_name'); ?><br>
                 [Ihre Adresse]<br>
                 Telefon: [Ihre Telefonnummer]<br>
-                E-Mail: <?php echo ADMIN_EMAIL; ?>
+                E-Mail: <?php echo get_org_setting('admin_email'); ?>
             </p>
             
             <h2>4. Datenerfassung auf dieser Website</h2>
@@ -90,7 +90,7 @@ include 'includes/header.php';
             </ul>
             
             <p>
-                Zur Ausübung Ihrer Rechte wenden Sie sich bitte an: <?php echo ADMIN_EMAIL; ?>
+                Zur Ausübung Ihrer Rechte wenden Sie sich bitte an: <?php echo get_org_setting('admin_email'); ?>
             </p>
             
             <h2>6. Änderungen dieser Datenschutzerklärung</h2>

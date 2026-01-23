@@ -3,7 +3,7 @@ require_once 'config/config.php';
 require_once 'config/database.php';
 require_once 'includes/functions.php';
 
-$page_title = 'Fahrzeuge - ' . SITE_NAME;
+$page_title = 'Fahrzeuge - ' . get_org_setting('site_name');
 
 // Get all active trucks
 $db = getDBConnection();

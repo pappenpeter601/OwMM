@@ -125,7 +125,8 @@ $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_p
               </div>';
         
         // Open registration requests count
-        $stmt = $db->query("SELECT COUNT(*) as count FROM registration_requests WHERE status = 'pending' AND email_verified_at IS NOT NULL");
+        // Show all pending registrations (including those not yet email-verified)
+        $stmt = $db->query("SELECT COUNT(*) as count FROM registration_requests WHERE status = 'pending'");
         $reg_count = $stmt->fetch()['count'];
         echo '<div class="stat-box">
                 <div class="stat-label" style="font-weight: bold;">Offene Registrierungen</div>
@@ -186,6 +187,7 @@ $perm_details = [
     'generate_obligations.php' => ['icon' => '📋', 'title' => 'Beitragsforderungen', 'desc' => 'Jahresbeiträge generieren und verwalten', 'url' => 'generate_obligations.php'],
     'items.php' => ['icon' => '📦', 'title' => 'Artikel', 'desc' => 'Artikel und Gegenstände verwalten', 'url' => 'items.php'],
     'outstanding_obligations.php' => ['icon' => '🔗', 'title' => 'Offene Forderungen', 'desc' => 'Mitgliedsbeiträge und Artikel-Verpflichtungen verwalten', 'url' => 'outstanding_obligations.php'],
+    'payment_reminders.php' => ['icon' => '📧', 'title' => 'Zahlungserinnerungen', 'desc' => 'Zahlungserinnerungen versenden und Versand-Historie', 'url' => 'payment_reminders.php'],
     'calendar.php' => ['icon' => '📆', 'title' => 'Kalender', 'desc' => 'Gemeinsamen Kalender verwalten', 'url' => 'calendar.php'],
     'check_periods.php' => ['icon' => '✅', 'title' => 'Prüfperioden', 'desc' => 'Kassenprüfung nach Perioden durchführen', 'url' => 'check_periods.php'],
 ];

@@ -5,13 +5,15 @@
  */
 
 require_once 'config/config.php';
+require_once 'config/database.php';
+require_once 'includes/functions.php';
 
 // Set XML header
 header('Content-Type: application/xml; charset=utf-8');
 header('Cache-Control: public, max-age=86400'); // Cache for 24 hours
 
 // Get base URL from config
-$base_url = SITE_URL;
+$base_url = get_org_setting('site_url');
 
 // Define all public pages with priority and change frequency
 $pages = [

@@ -47,7 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Login - <?php echo SITE_NAME; ?></title>
+    <title>Admin Login - <?php echo get_org_setting('site_name'); ?></title>
     <link rel="stylesheet" href="../assets/css/admin.css">
     <style>
         .login-page {
@@ -212,7 +212,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="login-container">
         <div class="login-box">
             <h1>Admin-Bereich</h1>
-            <p class="subtitle"><?php echo SITE_NAME; ?></p>
+            <p class="subtitle"><?php echo get_org_setting('site_name'); ?></p>
             
             <?php if ($error): ?>
                 <div class="alert alert-error"><?php echo $error; ?></div>

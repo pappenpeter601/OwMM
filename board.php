@@ -3,7 +3,7 @@ require_once 'config/config.php';
 require_once 'config/database.php';
 require_once 'includes/functions.php';
 
-$page_title = 'Kommando - ' . SITE_NAME;
+$page_title = 'Kommando - ' . get_org_setting('site_name');
 
 $board_members = get_board_members();
 

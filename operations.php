@@ -3,7 +3,7 @@ require_once 'config/config.php';
 require_once 'config/database.php';
 require_once 'includes/functions.php';
 
-$page_title = 'Einsätze - ' . SITE_NAME;
+$page_title = 'Einsätze - ' . get_org_setting('site_name');
 
 // Pagination
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
