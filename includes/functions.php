@@ -4,6 +4,45 @@
  */
 
 /**
+ * Get organization setting (from organization table)
+ */
+function get_org_setting($key, $default = '') {
+    static $org_cache = null;
+    
+    // Try to get from organization table first
+    if ($org_cache === null) {
+        try {
+            $db = getDBConnection();
+            $stmt = $db->query("SELECT name, website, email FROM organization WHERE id = 1");
+            $org_cache = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        } catch (Exception $e) {
+            $org_cache = [];
+        }
+    }
+    
+    // Map database fields to our keys
+    $mapping = [
+        'site_name' => 'name',
+        'site_url' => 'website',
+        'admin_email' => 'email'
+    ];
+    
+    // Handle computed values
+    if ($key === 'upload_url' && !empty($org_cache['website'])) {
+        return rtrim($org_cache['website'], '/') . '/uploads/';
+    }
+    
+    $db_key = $mapping[$key] ?? $key;
+    
+    // Return from organization table if available
+    if (!empty($org_cache[$db_key])) {
+        return $org_cache[$db_key];
+    }
+    
+    return $default;
+}
+
+/**
  * Sanitize input data
  */
 function sanitize_input($data) {
@@ -341,8 +380,8 @@ function get_social_media() {
  * Send email notification
  */
 function send_email($to, $subject, $message) {
-    $headers = "From: " . ADMIN_EMAIL . "\r\n";
-    $headers .= "Reply-To: " . ADMIN_EMAIL . "\r\n";
+    $headers = "From: " . get_org_setting('admin_email') . "\r\n";
+    $headers .= "Reply-To: " . get_org_setting('admin_email') . "\r\n";
     $headers .= "Content-Type: text/html; charset=UTF-8\r\n";
     
     return mail($to, $subject, $message, $headers);
@@ -353,7 +392,7 @@ function send_email($to, $subject, $message) {
 function can_edit_cash() {
     return has_permission('kontofuehrung.php') || has_permission('members.php') || 
            has_permission('generate_obligations.php') || has_permission('items.php') || 
-           has_permission('outstanding_obligations.php');
+           has_permission('outstanding_obligations.php') || has_permission('payment_reminders.php');
 }
 
 /**

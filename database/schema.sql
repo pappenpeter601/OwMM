@@ -37,10 +37,41 @@ CREATE TABLE IF NOT EXISTS `email_config` (
   `from_email` varchar(255) NOT NULL,
   `from_name` varchar(255) NOT NULL,
   `use_tls` tinyint(1) NOT NULL DEFAULT 1,
+  `owmm_iban` varchar(34) DEFAULT 'DE89 3704 0044 0532 0130 00' COMMENT 'OwMM bank account IBAN for payment reminders',
+  `paypal_link` varchar(255) DEFAULT 'https://paypal.me/owmm' COMMENT 'PayPal payment link for reminders',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Organization settings table (stores organization info, contact details, bank accounts, etc.)
+CREATE TABLE IF NOT EXISTS `organization` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) NOT NULL COMMENT 'Organization name',
+  `legal_name` varchar(255) DEFAULT NULL COMMENT 'Legal name for invoices',
+  `iban` varchar(34) DEFAULT NULL COMMENT 'Bank account IBAN',
+  `bic` varchar(11) DEFAULT NULL COMMENT 'Bank Identifier Code',
+  `paypal_link` varchar(255) DEFAULT NULL COMMENT 'PayPal payment link',
+  `phone` varchar(20) DEFAULT NULL COMMENT 'Main phone number',
+  `phone_emergency` varchar(20) DEFAULT NULL COMMENT 'Emergency contact number',
+  `email` varchar(255) DEFAULT NULL COMMENT 'Main email address',
+  `email_support` varchar(255) DEFAULT NULL COMMENT 'Support email address',
+  `street` varchar(255) DEFAULT NULL COMMENT 'Street address',
+  `postal_code` varchar(10) DEFAULT NULL COMMENT 'Postal code',
+  `city` varchar(255) DEFAULT NULL COMMENT 'City',
+  `country` varchar(255) DEFAULT 'Deutschland' COMMENT 'Country',
+  `website` varchar(255) DEFAULT NULL COMMENT 'Website URL',
+  `bank_name` varchar(255) DEFAULT NULL COMMENT 'Bank name',
+  `bank_owner` varchar(255) DEFAULT NULL COMMENT 'Account owner name',
+  `notes` text COMMENT 'Additional notes',
+  `logo_url` varchar(255) DEFAULT NULL COMMENT 'URL to organization logo',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `updated_by` int(11) DEFAULT NULL COMMENT 'User who last updated settings',
+  PRIMARY KEY (`id`),
+  KEY `updated_by` (`updated_by`),
+  CONSTRAINT `organization_ibfk_1` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Organization settings and contact information';
 
 -- Magic link tokens (for passwordless authentication)
 CREATE TABLE IF NOT EXISTS `magic_links` (
@@ -537,6 +568,31 @@ CREATE TABLE IF NOT EXISTS `item_obligation_payments` (
   CONSTRAINT `item_obligation_payments_ibfk_3` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Payment reminders tracking table
+CREATE TABLE IF NOT EXISTS `payment_reminders` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `member_id` int(11) NOT NULL COMMENT 'Member who received the reminder',
+  `obligation_id` int(11) NOT NULL COMMENT 'Fee obligation the reminder is about',
+  `reminder_type` enum('first','second','final','custom') NOT NULL DEFAULT 'first' COMMENT 'Type of reminder sent',
+  `sent_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'When the reminder was sent',
+  `sent_to_email` varchar(255) NOT NULL COMMENT 'Email address used',
+  `cc_email` varchar(255) DEFAULT NULL COMMENT 'CC recipient (usually admin)',
+  `template_used` varchar(50) NOT NULL COMMENT 'Template identifier (active/supporter)',
+  `email_subject` varchar(255) NOT NULL COMMENT 'Subject line of the email',
+  `sent_by` int(11) DEFAULT NULL COMMENT 'User who triggered the send',
+  `success` tinyint(1) NOT NULL DEFAULT 1 COMMENT 'Whether sending was successful',
+  `error_message` text COMMENT 'Error details if sending failed',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `member_id` (`member_id`),
+  KEY `obligation_id` (`obligation_id`),
+  KEY `sent_at` (`sent_at`),
+  KEY `sent_by` (`sent_by`),
+  CONSTRAINT `payment_reminders_ibfk_1` FOREIGN KEY (`member_id`) REFERENCES `members` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `payment_reminders_ibfk_2` FOREIGN KEY (`obligation_id`) REFERENCES `member_fee_obligations` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `payment_reminders_ibfk_3` FOREIGN KEY (`sent_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Tracks all payment reminder emails sent to members';
+
 -- Insert default admin user (password: admin123 - CHANGE THIS!)
 INSERT INTO `users` (`username`, `email`, `password`, `is_admin`, `first_name`, `last_name`, `email_verified`) VALUES
 ('admin', 'admin@example.com', '$2y$10$Q508QQp7rNEJLQXGlnmC2.uzCUmjeVW6PNNANDRzHmzl/9Okger9y', 1, 'Admin', 'User', 1);
@@ -597,6 +653,7 @@ INSERT INTO `permissions` (`name`, `display_name`, `description`, `category`) VA
 ('generate_obligations.php', 'Beitragsforderungen', 'Beiträge generieren', 'Finanzen'),
 ('items.php', 'Artikel', 'Artikel verwalten', 'Basic'),
 ('outstanding_obligations.php', 'Offene Forderungen', 'Offene Forderungen verwalten', 'Finanzen'),
+('payment_reminders.php', 'Zahlungserinnerungen', 'Zahlungserinnerungen versenden und Historie einsehen', 'Finanzen'),
 ('selfservice.php', 'Self-Service', 'Zugriff auf Organisationsdaten', 'Basic'),
 ('calendar.php', 'Kalender', 'Gemeinsamen Kalender verwalten', 'Basic');
 

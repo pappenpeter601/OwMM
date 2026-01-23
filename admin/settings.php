@@ -219,6 +219,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = "Fehler: " . $e->getMessage();
             }
         }
+    } elseif ($section === 'organization') {
+        $action = $_POST['action'] ?? 'save';
+        
+        if ($action === 'save') {
+            try {
+                $data = [
+                    'name' => sanitize_input($_POST['name'] ?? ''),
+                    'legal_name' => sanitize_input($_POST['legal_name'] ?? ''),
+                    'iban' => sanitize_input($_POST['iban'] ?? ''),
+                    'bic' => sanitize_input($_POST['bic'] ?? ''),
+                    'paypal_link' => sanitize_input($_POST['paypal_link'] ?? ''),
+                    'phone' => sanitize_input($_POST['phone'] ?? ''),
+                    'phone_emergency' => sanitize_input($_POST['phone_emergency'] ?? ''),
+                    'email' => sanitize_input($_POST['email'] ?? ''),
+                    'email_support' => sanitize_input($_POST['email_support'] ?? ''),
+                    'street' => sanitize_input($_POST['street'] ?? ''),
+                    'postal_code' => sanitize_input($_POST['postal_code'] ?? ''),
+                    'city' => sanitize_input($_POST['city'] ?? ''),
+                    'country' => sanitize_input($_POST['country'] ?? 'Deutschland'),
+                    'website' => sanitize_input($_POST['website'] ?? ''),
+                    'bank_name' => sanitize_input($_POST['bank_name'] ?? ''),
+                    'bank_owner' => sanitize_input($_POST['bank_owner'] ?? ''),
+                    'notes' => $_POST['notes'] ?? '',
+                    'updated_by' => $_SESSION['user_id']
+                ];
+                
+                // Check if organization exists
+                $stmt = $db->query("SELECT id FROM organization WHERE id = 1");
+                $exists = $stmt->fetch();
+                
+                if ($exists) {
+                    $sql = "UPDATE organization SET " . 
+                           implode(", ", array_map(fn($k) => "$k = :$k", array_keys($data))) . 
+                           " WHERE id = 1";
+                    $stmt = $db->prepare($sql);
+                    $stmt->execute($data);
+                } else {
+                    $data['id'] = 1;
+                    $columns = implode(", ", array_keys($data));
+                    $placeholders = implode(", ", array_map(fn($k) => ":$k", array_keys($data)));
+                    $sql = "INSERT INTO organization ($columns) VALUES ($placeholders)";
+                    $stmt = $db->prepare($sql);
+                    $stmt->execute($data);
+                }
+                
+                $success = "Organisationseinstellungen erfolgreich gespeichert.";
+            } catch (Exception $e) {
+                $error = "Fehler beim Speichern: " . $e->getMessage();
+            }
+        }
+    } elseif ($section === 'fees') {
+        $action = $_POST['action'] ?? 'save';
+        
+        if ($action === 'add') {
+            try {
+                $member_type = sanitize_input($_POST['member_type']);
+                $minimum_amount = (float)$_POST['minimum_amount'];
+                $valid_from = sanitize_input($_POST['valid_from']);
+                $valid_until = !empty($_POST['valid_until']) ? sanitize_input($_POST['valid_until']) : null;
+                $description = sanitize_input($_POST['description'] ?? '');
+                
+                $stmt = $db->prepare("INSERT INTO membership_fees (member_type, minimum_amount, valid_from, valid_until, description, created_by) 
+                                     VALUES (?, ?, ?, ?, ?, ?)");
+                $stmt->execute([$member_type, $minimum_amount, $valid_from, $valid_until, $description, $_SESSION['user_id']]);
+                $success = "Beitragssatz erfolgreich hinzugefügt.";
+            } catch (Exception $e) {
+                $error = "Fehler beim Hinzufügen: " . $e->getMessage();
+            }
+        } elseif ($action === 'update') {
+            try {
+                $id = (int)$_POST['id'];
+                $minimum_amount = (float)$_POST['minimum_amount'];
+                $valid_until = !empty($_POST['valid_until']) ? sanitize_input($_POST['valid_until']) : null;
+                $description = sanitize_input($_POST['description'] ?? '');
+                
+                $stmt = $db->prepare("UPDATE membership_fees SET minimum_amount = ?, valid_until = ?, description = ? WHERE id = ?");
+                $stmt->execute([$minimum_amount, $valid_until, $description, $id]);
+                $success = "Beitragssatz erfolgreich aktualisiert.";
+            } catch (Exception $e) {
+                $error = "Fehler beim Aktualisieren: " . $e->getMessage();
+            }
+        } elseif ($action === 'delete') {
+            try {
+                $id = (int)$_POST['id'];
+                $stmt = $db->prepare("DELETE FROM membership_fees WHERE id = ?");
+                $stmt->execute([$id]);
+                $success = "Beitragssatz gelöscht.";
+            } catch (Exception $e) {
+                $error = "Fehler beim Löschen: " . $e->getMessage();
+            }
+        }
     } elseif ($section === 'permissions') {
         $action = $_POST['action'];
         
@@ -432,7 +523,9 @@ if (isset($_SESSION['success_message'])) {
 
 <div class="settings-tabs">
     <button class="tab-btn active" onclick="showTab('email')">E-Mail</button>
+    <button class="tab-btn" onclick="showTab('organization')">Organisation</button>
     <button class="tab-btn" onclick="showTab('social')">Social Media</button>
+    <button class="tab-btn" onclick="showTab('fees')">Beitragssätze</button>
     <button class="tab-btn" onclick="showTab('categories')">Kategorien</button>
     <button class="tab-btn" onclick="showTab('users')">Benutzer & Berechtigungen</button>
 </div>
@@ -508,6 +601,138 @@ if (isset($_SESSION['success_message'])) {
     </div>
 </div>
 
+<!-- Organization Tab -->
+<div id="organization-tab" class="tab-content">
+    <h2>Organisationsinformationen</h2>
+    <p style="color: #666; margin-bottom: 20px;">Verwaltung der Organisationsdaten (Name, Kontaktdaten, Bankdaten, etc.). Diese Informationen werden in Zahlungserinnerungen und anderen Kommunikationen verwendet.</p>
+    
+    <?php
+    $stmt = $db->query("SELECT * FROM organization WHERE id = 1");
+    $org = $stmt->fetch(PDO::FETCH_ASSOC) ?? [];
+    ?>
+    
+    <form method="POST" style="max-width: 800px;">
+        <input type="hidden" name="section" value="organization">
+        <input type="hidden" name="action" value="save">
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px;">
+            <!-- Basis-Informationen -->
+            <fieldset style="grid-column: 1 / -1; border: 1px solid #ddd; padding: 15px; border-radius: 8px;">
+                <legend style="padding: 0 10px; font-weight: bold; color: #333;">Basis-Informationen</legend>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">Name der Organisation *</label>
+                    <input type="text" name="name" value="<?php echo htmlspecialchars($org['name'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">Rechtlicher Name</label>
+                    <input type="text" name="legal_name" value="<?php echo htmlspecialchars($org['legal_name'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <small style="color: #999;">Für Rechnungen und offizielle Dokumente</small>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">Website</label>
+                    <input type="url" name="website" value="<?php echo htmlspecialchars($org['website'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" placeholder="https://...">
+                </div>
+            </fieldset>
+            
+            <!-- Kontaktdaten -->
+            <fieldset style="grid-column: 1 / -1; border: 1px solid #ddd; padding: 15px; border-radius: 8px;">
+                <legend style="padding: 0 10px; font-weight: bold; color: #333;">Kontaktinformationen</legend>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">Telefon (Zentrale)</label>
+                    <input type="tel" name="phone" value="<?php echo htmlspecialchars($org['phone'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">Notruf / Notfall</label>
+                    <input type="tel" name="phone_emergency" value="<?php echo htmlspecialchars($org['phone_emergency'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">E-Mail (Hauptadresse)</label>
+                    <input type="email" name="email" value="<?php echo htmlspecialchars($org['email'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">E-Mail (Support)</label>
+                    <input type="email" name="email_support" value="<?php echo htmlspecialchars($org['email_support'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+            </fieldset>
+            
+            <!-- Adresse -->
+            <fieldset style="grid-column: 1 / -1; border: 1px solid #ddd; padding: 15px; border-radius: 8px;">
+                <legend style="padding: 0 10px; font-weight: bold; color: #333;">Adresse</legend>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">Straße und Hausnummer</label>
+                    <input type="text" name="street" value="<?php echo htmlspecialchars($org['street'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                
+                <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 15px; margin-bottom: 15px;">
+                    <div>
+                        <label style="display:block; margin-bottom: 8px; font-weight: bold;">PLZ</label>
+                        <input type="text" name="postal_code" value="<?php echo htmlspecialchars($org['postal_code'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                    <div>
+                        <label style="display:block; margin-bottom: 8px; font-weight: bold;">Stadt</label>
+                        <input type="text" name="city" value="<?php echo htmlspecialchars($org['city'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">Land</label>
+                    <input type="text" name="country" value="<?php echo htmlspecialchars($org['country'] ?? 'Deutschland'); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+            </fieldset>
+            
+            <!-- Bankdaten -->
+            <fieldset style="grid-column: 1 / -1; border: 1px solid #ddd; padding: 15px; border-radius: 8px;">
+                <legend style="padding: 0 10px; font-weight: bold; color: #333;">Bankdaten</legend>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">Kontoinhaber</label>
+                    <input type="text" name="bank_owner" value="<?php echo htmlspecialchars($org['bank_owner'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">Bank</label>
+                    <input type="text" name="bank_name" value="<?php echo htmlspecialchars($org['bank_name'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">IBAN</label>
+                    <input type="text" name="iban" value="<?php echo htmlspecialchars($org['iban'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" placeholder="DE89...">
+                    <small style="color: #999;">Wird in Zahlungserinnerungen verwendet</small>
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">BIC / SWIFT Code</label>
+                    <input type="text" name="bic" value="<?php echo htmlspecialchars($org['bic'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label style="display:block; margin-bottom: 8px; font-weight: bold;">PayPal Link</label>
+                    <input type="url" name="paypal_link" value="<?php echo htmlspecialchars($org['paypal_link'] ?? ''); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" placeholder="https://paypal.me/...">
+                    <small style="color: #999;">Wird in Zahlungserinnerungen verwendet</small>
+                </div>
+            </fieldset>
+            
+            <!-- Notizen -->
+            <fieldset style="grid-column: 1 / -1; border: 1px solid #ddd; padding: 15px; border-radius: 8px;">
+                <legend style="padding: 0 10px; font-weight: bold; color: #333;">Zusätzliche Notizen</legend>
+                
+                <textarea name="notes" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; min-height: 100px; font-family: sans-serif;"><?php echo htmlspecialchars($org['notes'] ?? ''); ?></textarea>
+                <small style="color: #999;">Interne Notizen, die nicht öffentlich angezeigt werden</small>
+            </fieldset>
+        </div>
+        
+        <button type="submit" class="btn btn-primary btn-large">Einstellungen speichern</button>
+    </form>
+</div>
+
 <!-- Social Media Tab -->
 <div id="social-tab" class="tab-content">
     <h2>Social Media Links</h2>
@@ -558,6 +783,125 @@ if (isset($_SESSION['success_message'])) {
             <input type="number" name="sort_order" placeholder="Sortierung" value="10" style="width: 100px;">
             <button type="submit" class="btn btn-primary">Hinzufügen</button>
         </div>
+    </form>
+</div>
+
+<!-- Fees Tab -->
+<div id="fees-tab" class="tab-content">
+    <h2>Beitragssätze verwalten</h2>
+    <p style="color: #666; margin-bottom: 20px;">Verwalten Sie die Mitgliedsbeitragssätze. PayPal-Links und QR-Codes werden automatisch generiert.</p>
+    
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Mitgliedertyp</th>
+                    <th>Beitrag</th>
+                    <th>Gültig ab</th>
+                    <th>Gültig bis</th>
+                    <th>PayPal-Link</th>
+                    <th>QR-Code</th>
+                    <th>Beschreibung</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php
+                $stmt = $db->query("SELECT * FROM membership_fees ORDER BY valid_from DESC, member_type");
+                $all_fees = $stmt->fetchAll();
+                foreach ($all_fees as $fee):
+                    // Generate PayPal link
+                    $org_stmt = $db->query("SELECT paypal_link FROM organization WHERE id = 1");
+                    $org = $org_stmt->fetch();
+                    $paypal_base = $org['paypal_link'] ?? '';
+                    $paypal_link = $paypal_base ? $paypal_base . '/' . number_format($fee['minimum_amount'], 2) : '';
+                    $qr_code_url = "https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=" . urlencode($paypal_link);
+                ?>
+                <tr>
+                    <td>
+                        <strong><?php 
+                            $types = ['active' => 'Aktiv', 'supporter' => 'Gönner', 'pensioner' => 'Rentner'];
+                            echo htmlspecialchars($types[$fee['member_type']] ?? $fee['member_type']);
+                        ?></strong>
+                    </td>
+                    <td>€ <?php echo number_format($fee['minimum_amount'], 2, ',', '.'); ?></td>
+                    <td><?php echo date('d.m.Y', strtotime($fee['valid_from'])); ?></td>
+                    <td><?php echo $fee['valid_until'] ? date('d.m.Y', strtotime($fee['valid_until'])) : '<span style="color: #2ecc71;">aktuell</span>'; ?></td>
+                    <td>
+                        <?php if ($paypal_link): ?>
+                            <a href="<?php echo htmlspecialchars($paypal_link); ?>" target="_blank" class="btn btn-sm btn-secondary" title="PayPal-Link öffnen">
+                                <i class="fab fa-paypal"></i> PayPal
+                            </a>
+                        <?php else: ?>
+                            <span style="color: #999;">Kein PayPal Link</span>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <?php if ($paypal_link): ?>
+                            <a href="<?php echo htmlspecialchars($qr_code_url); ?>" target="_blank" title="QR-Code vergrößern">
+                                <img src="<?php echo htmlspecialchars($qr_code_url); ?>" alt="QR-Code" style="width: 60px; height: 60px;">
+                            </a>
+                        <?php else: ?>
+                            <span style="color: #999;">Keine PayPal</span>
+                        <?php endif; ?>
+                    </td>
+                    <td><?php echo htmlspecialchars($fee['description'] ?? ''); ?></td>
+                    <td class="actions">
+                        <button type="button" class="btn btn-sm btn-primary" onclick="editFee(<?php echo $fee['id']; ?>, '<?php echo htmlspecialchars(json_encode($fee), ENT_QUOTES); ?>')">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                        <form method="POST" style="display:inline;">
+                            <input type="hidden" name="section" value="fees">
+                            <input type="hidden" name="action" value="delete">
+                            <input type="hidden" name="id" value="<?php echo $fee['id']; ?>">
+                            <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Wirklich löschen?')">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+    
+    <h3 style="margin-top: 30px;">Neuen Beitragssatz hinzufügen</h3>
+    <form method="POST" style="max-width: 600px;">
+        <input type="hidden" name="section" value="fees">
+        <input type="hidden" name="action" value="add">
+        
+        <div style="margin-bottom: 15px;">
+            <label style="display:block; margin-bottom: 8px; font-weight: bold;">Mitgliedertyp *</label>
+            <select name="member_type" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+                <option value="">-- Bitte auswählen --</option>
+                <option value="active">Aktive Mitglieder</option>
+                <option value="supporter">Gönner</option>
+                <option value="pensioner">Rentner</option>
+            </select>
+        </div>
+        
+        <div style="margin-bottom: 15px;">
+            <label style="display:block; margin-bottom: 8px; font-weight: bold;">Mindestbeitrag (€) *</label>
+            <input type="number" name="minimum_amount" step="0.01" min="0" placeholder="z.B. 60.00" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+            <div>
+                <label style="display:block; margin-bottom: 8px; font-weight: bold;">Gültig ab *</label>
+                <input type="date" name="valid_from" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+            </div>
+            <div>
+                <label style="display:block; margin-bottom: 8px; font-weight: bold;">Gültig bis (optional)</label>
+                <input type="date" name="valid_until" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+        </div>
+        
+        <div style="margin-bottom: 15px;">
+            <label style="display:block; margin-bottom: 8px; font-weight: bold;">Beschreibung (optional)</label>
+            <input type="text" name="description" placeholder="z.B. Regelsatz 2024" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+        </div>
+        
+        <button type="submit" class="btn btn-primary">Beitragssatz hinzufügen</button>
     </form>
 </div>
 
@@ -880,15 +1224,21 @@ function showTab(tab) {
     if (tab === 'email') {
         document.getElementById('email-tab').classList.add('active');
         document.querySelectorAll('.tab-btn')[0].classList.add('active');
+    } else if (tab === 'organization') {
+        document.getElementById('organization-tab').classList.add('active');
+        document.querySelectorAll('.tab-btn')[1].classList.add('active');
     } else if (tab === 'social') {
         document.getElementById('social-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[1].classList.add('active');
+        document.querySelectorAll('.tab-btn')[2].classList.add('active');
+    } else if (tab === 'fees') {
+        document.getElementById('fees-tab').classList.add('active');
+        document.querySelectorAll('.tab-btn')[3].classList.add('active');
     } else if (tab === 'categories') {
         document.getElementById('categories-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[2].classList.add('active');
+        document.querySelectorAll('.tab-btn')[4].classList.add('active');
     } else if (tab === 'users') {
         document.getElementById('users-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[3].classList.add('active');
+        document.querySelectorAll('.tab-btn')[5].classList.add('active');
     }
 }
 

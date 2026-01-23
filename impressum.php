@@ -3,7 +3,7 @@ require_once 'config/config.php';
 require_once 'config/database.php';
 require_once 'includes/functions.php';
 
-$page_title = 'Impressum - ' . SITE_NAME;
+$page_title = 'Impressum - ' . get_org_setting('site_name');
 
 include 'includes/header.php';
 ?>
@@ -64,7 +64,7 @@ include 'includes/header.php';
             
             <h2>Bildnachweise</h2>
             <p>
-                Alle auf dieser Website verwendeten Bilder sind Eigentum von <?php echo SITE_NAME; ?> oder wurden mit entsprechender Lizenz verwendet.
+                Alle auf dieser Website verwendeten Bilder sind Eigentum von <?php echo get_org_setting('site_name'); ?> oder wurden mit entsprechender Lizenz verwendet.
             </p>
         </div>
     </div>

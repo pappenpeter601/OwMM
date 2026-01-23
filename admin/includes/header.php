@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?php echo $page_title ?? 'Admin'; ?> - <?php echo SITE_NAME; ?></title>
+    <title><?php echo $page_title ?? 'Admin'; ?> - <?php echo get_org_setting('site_name'); ?></title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
     <link rel="stylesheet" href="../assets/css/admin.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
@@ -76,6 +76,9 @@
                 </a>
                 <a href="outstanding_obligations.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'outstanding_obligations.php' || basename($_SERVER['PHP_SELF']) == 'create_item_obligation.php' || basename($_SERVER['PHP_SELF']) == 'view_item_obligation.php' ? 'active' : ''; ?>">
                     <i class="fas fa-link"></i> Offene Forderungen
+                </a>
+                <a href="payment_reminders.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'payment_reminders.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-envelope"></i> Zahlungserinnerungen
                 </a>
                 <?php endif; ?>
                 
