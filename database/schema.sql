@@ -786,3 +786,23 @@ CREATE TABLE IF NOT EXISTS `credentials` (
   CONSTRAINT `credentials_ibfk_1` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
   CONSTRAINT `credentials_ibfk_2` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- CalDAV calendar settings (for integration with Baikal server)
+CREATE TABLE IF NOT EXISTS `calendar_settings` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `base_url` varchar(500) NOT NULL COMMENT 'Base URL of CalDAV server (e.g., https://example.com/baikal)',
+  `calendar_path` varchar(500) NOT NULL COMMENT 'Calendar collection path (e.g., /cal.php/calendars/user/calendar/)',
+  `username` varchar(255) NOT NULL COMMENT 'CalDAV username',
+  `password` text NOT NULL COMMENT 'Base64-encoded CalDAV password',
+  `display_name` varchar(255) DEFAULT 'Calendar' COMMENT 'Display name for the calendar',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` int(11) DEFAULT NULL,
+  `updated_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `created_by` (`created_by`),
+  KEY `updated_by` (`updated_by`),
+  CONSTRAINT `calendar_settings_ibfk_1` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `calendar_settings_ibfk_2` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='CalDAV calendar server configuration';
+
