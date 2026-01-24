@@ -8,8 +8,23 @@ if (!is_logged_in()) {
     redirect('login.php');
 }
 
+// Check dashboard permission
+if (!is_admin() && !has_permission('dashboard.php')) {
+    redirect('profile.php');
+}
+
+// Clear the privacy policy flag when on dashboard
+if (isset($_SESSION['show_privacy_policy_only'])) {
+    unset($_SESSION['show_privacy_policy_only']);
+}
+
 $page_title = 'Dashboard';
 include 'includes/header.php';
+
+// Check if user is a supporter - if so, redirect to profile
+if (is_supporter($_SESSION['user_id'])) {
+    redirect('profile.php');
+}
 
 // Check if user has any permissions
 $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_permission('members.php') || 

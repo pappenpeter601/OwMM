@@ -72,6 +72,50 @@ if (empty($token)) {
         $_SESSION['auth_method'] = 'magic_link';
         $_SESSION['login_time'] = time();
         
+        // Check if user needs to accept privacy policy
+        $stmt = $pdo->prepare("
+            SELECT ppv.id, ppv.version FROM privacy_policy_versions ppv
+            WHERE ppv.published_at IS NOT NULL
+            ORDER BY ppv.published_at DESC
+            LIMIT 1
+        ");
+        $stmt->execute();
+        $latest_policy = $stmt->fetch();
+        
+        if ($latest_policy) {
+            // Check if user has accepted this specific policy version
+            $stmt = $pdo->prepare("
+                SELECT id FROM privacy_policy_consent 
+                WHERE user_id = ? AND policy_version_id = ? AND accepted = 1
+                LIMIT 1
+            ");
+            $stmt->execute([$magic_link['user_id'], $latest_policy['id']]);
+            $accepted = $stmt->fetch();
+            
+            if (!$accepted) {
+                // User must accept privacy policy before continuing
+                // Redirect to privacy policy in admin, and after acceptance go to profile in admin
+                header('Location: admin/privacy_policy.php?redirect=profile.php');
+                exit;
+            }
+        }
+        
+        // Check if user is a supporter to redirect to profile instead of dashboard
+        $stmt = $pdo->prepare("SELECT member_id FROM users WHERE id = ?");
+        $stmt->execute([$magic_link['user_id']]);
+        $user = $stmt->fetch();
+        
+        if ($user && $user['member_id'] && !$_SESSION['is_admin']) {
+            $stmt = $pdo->prepare("SELECT member_type FROM members WHERE id = ?");
+            $stmt->execute([$user['member_id']]);
+            $member = $stmt->fetch();
+            if ($member && $member['member_type'] === 'supporter') {
+                // Supporters go to profile first
+                header('Location: admin/profile.php');
+                exit;
+            }
+        }
+        
         // Redirect to dashboard
         header('Location: admin/dashboard.php');
         exit;

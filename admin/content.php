@@ -4,7 +4,7 @@ require_once '../config/database.php';
 require_once '../includes/functions.php';
 
 // Check permissions
-if (!is_logged_in() || !can_edit_page_content()) {
+if (!is_logged_in() || !has_permission('content.php')) {
     redirect('dashboard.php');
 }
 

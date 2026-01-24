@@ -1,5 +1,7 @@
-<?php
-require_once '../config/config.php';
+// Check permissions - only admins can access debug tools
+if (!is_logged_in() || !is_admin()) {
+    redirect('dashboard.php');
+}
 require_once '../config/database.php';
 require_once '../includes/functions.php';
 

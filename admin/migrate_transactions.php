@@ -27,6 +27,11 @@ require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/functions.php';
 
+// Check permissions - only admins can migrate transactions (web access only)
+if (php_sapi_name() !== 'cli' && (!is_logged_in() || !is_admin())) {
+    redirect('dashboard.php');
+}
+
 // Detect if running in browser or CLI
 $is_cli = php_sapi_name() === 'cli';
 $output = [];

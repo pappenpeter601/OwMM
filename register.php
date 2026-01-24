@@ -73,7 +73,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Send notification to admin
         $adminResult = $emailService->sendAdminRegistrationNotification($email, $first_name, $last_name);
         
-        $success_message = "Registrierung erfolgreich! Bitte überprüfen Sie Ihr E-Mail-Postfach und bestätigen Sie Ihre E-Mail-Adresse. Nach der Bestätigung wird ein Administrator Ihre Registrierung prüfen.";
+        $success_message = "Registrierung erfolgreich! Bitte überprüfen Sie Ihr E-Mail-Postfach und bestätigen Sie Ihre E-Mail-Adresse. Nach der Bestätigung wird ein Administrator Ihre Registrierung prüfen. <strong>⚠️ Hinweis: Kontrollieren Sie bitte auch den SPAM/Junk-Ordner Ihres E-Mail-Accounts, da Bestätigungsmails dort landen können.</strong>";
         
         // Clear form
         $_POST = [];
@@ -116,6 +116,13 @@ include 'includes/header.php';
                             <li>Warten Sie auf die Genehmigung durch einen Administrator</li>
                             <li>Melden Sie sich mit Magic Link an (kein Passwort erforderlich)</li>
                         </ul>
+                        <div style="margin-top: 15px; padding: 10px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
+                            <strong style="color: #856404;">⚠️ Wichtig:</strong>
+                            <p style="margin: 5px 0 0 0; color: #856404; font-size: 0.95em;">
+                                Bestätigungs- und Genehmigungsmails können in Ihrem <strong>SPAM/Junk-Ordner</strong> landen. 
+                                Bitte überprüfen Sie diesen Ordner, wenn Sie keine E-Mail in Ihrem Posteingang finden.
+                            </p>
+                        </div>
                     </div>
                     
                     <form method="POST">

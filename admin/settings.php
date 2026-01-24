@@ -328,6 +328,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute([$user_id, $permission_id]);
             $success = "Berechtigung entzogen";
         }
+    } elseif ($section === 'privacy_policy') {
+        $action = $_POST['action'] ?? '';
+        
+        if ($action === 'create_version') {
+            try {
+                // Get the current active version
+                $stmt = $db->prepare("SELECT * FROM privacy_policy_versions ORDER BY version DESC LIMIT 1");
+                $stmt->execute();
+                $current = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($current) {
+                    // Calculate new version number
+                    $current_version = (float)$current['version'];
+                    $new_version = number_format($current_version + 0.1, 1);
+                } else {
+                    $new_version = '1.0';
+                }
+                
+                // Create new draft version (copy of current)
+                $content = $current ? $current['content'] : '';
+                $summary = $current ? $current['summary'] : '';
+                
+                $stmt = $db->prepare("INSERT INTO privacy_policy_versions (version, content, summary, created_by) 
+                                     VALUES (?, ?, ?, ?)");
+                $stmt->execute([$new_version, $content, $summary, $_SESSION['user_id']]);
+                $success = "Neue Version $new_version erstellt (Entwurf)";
+            } catch (Exception $e) {
+                $error = "Fehler beim Erstellen der Version: " . $e->getMessage();
+            }
+        } elseif ($action === 'save_draft') {
+            try {
+                $version_id = (int)$_POST['version_id'];
+                $content = $_POST['content'] ?? '';
+                $summary = $_POST['summary'] ?? '';
+                
+                $stmt = $db->prepare("UPDATE privacy_policy_versions SET content = ?, summary = ? WHERE id = ? AND published_at IS NULL");
+                $stmt->execute([$content, $summary, $version_id]);
+                $success = "Entwurf gespeichert";
+            } catch (Exception $e) {
+                $error = "Fehler beim Speichern: " . $e->getMessage();
+            }
+        } elseif ($action === 'publish') {
+            try {
+                $version_id = (int)$_POST['version_id'];
+                
+                // Set this version as active with today's date
+                $stmt = $db->prepare("UPDATE privacy_policy_versions SET published_at = NOW() WHERE id = ?");
+                $stmt->execute([$version_id]);
+                
+                $success = "Version veröffentlicht! Benutzer müssen diese Version beim nächsten Login akzeptieren.";
+            } catch (Exception $e) {
+                $error = "Fehler beim Veröffentlichen: " . $e->getMessage();
+            }
+        } elseif ($action === 'delete_draft') {
+            try {
+                $version_id = (int)$_POST['version_id'];
+                
+                // Only allow deletion of unpublished drafts
+                $stmt = $db->prepare("DELETE FROM privacy_policy_versions WHERE id = ? AND published_at IS NULL");
+                $stmt->execute([$version_id]);
+                $success = "Entwurf gelöscht";
+            } catch (Exception $e) {
+                $error = "Fehler beim Löschen: " . $e->getMessage();
+            }
+        }
     }
 }
 
@@ -499,6 +564,42 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'user_detail') {
     exit;
 }
 
+// AJAX: View privacy policy version
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'view_version') {
+    $version_id = (int)($_GET['version_id'] ?? 0);
+    
+    $stmt = $db->prepare("SELECT * FROM privacy_policy_versions WHERE id = ?");
+    $stmt->execute([$version_id]);
+    $version = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($version) {
+        ?>
+        <h3 style="margin-top: 0;">Datenschutzerklärung v<?php echo htmlspecialchars($version['version']); ?></h3>
+        
+        <?php if ($version['summary']): ?>
+            <div style="background: #f0f7ff; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; border-left: 3px solid #2196f3;">
+                <strong>Zusammenfassung:</strong><br>
+                <?php echo nl2br(htmlspecialchars($version['summary'])); ?>
+            </div>
+        <?php endif; ?>
+        
+        <div style="background: #fafafa; padding: 1.5rem; border-radius: 6px; border: 1px solid #ddd; white-space: pre-wrap; font-family: monospace; font-size: 0.9rem; max-height: 60vh; overflow-y: auto; line-height: 1.5;">
+            <?php echo htmlspecialchars($version['content']); ?>
+        </div>
+        
+        <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #ddd; font-size: 0.85rem; color: #666;">
+            Erstellt am: <?php echo date('d.m.Y H:i', strtotime($version['created_at'])); ?>
+            <?php if ($version['published_at']): ?>
+                <br>Veröffentlicht am: <?php echo date('d.m.Y H:i', strtotime($version['published_at'])); ?>
+            <?php endif; ?>
+        </div>
+        <?php
+    } else {
+        echo '<p style="color: #f44336;">Version nicht gefunden.</p>';
+    }
+    exit;
+}
+
 $page_title = 'Einstellungen';
 include 'includes/header.php';
 
@@ -508,6 +609,175 @@ if (isset($_SESSION['success_message'])) {
     unset($_SESSION['success_message']);
 }
 ?>
+
+<script>
+// Define showTab immediately so onclick handlers work
+function showTab(tab) {
+    const tabElements = document.querySelectorAll('.tab-content');
+    const btnElements = document.querySelectorAll('.tab-btn');
+
+    // Hide all tabs forcefully to avoid CSS conflicts
+    tabElements.forEach(el => {
+        el.classList.remove('active');
+        el.style.display = 'none';
+    });
+    btnElements.forEach(el => el.classList.remove('active'));
+
+    const tabMap = {
+        'email': ['email-tab', 0],
+        'organization': ['organization-tab', 1],
+        'social': ['social-tab', 2],
+        'fees': ['fees-tab', 3],
+        'categories': ['categories-tab', 4],
+        'privacy_policy': ['privacy_policy-tab', 5],
+        'users': ['users-tab', 6]
+    };
+    const [tabId, btnIndex] = tabMap[tab] || tabMap['email'];
+    const tabEl = document.getElementById(tabId);
+    const btnEl = btnElements[btnIndex];
+
+    if (tabEl) {
+        tabEl.style.display = 'block';
+        tabEl.classList.add('active');
+        try { tabEl.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch(e) {}
+    }
+    if (btnEl) {
+        btnEl.classList.add('active');
+    }
+}
+
+function deleteSocialMedia(id) {
+    if (confirm('Diesen Social Media Link löschen?')) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.innerHTML = '<input type="hidden" name="section" value="social_media">' +
+                        '<input type="hidden" name="action" value="delete">' +
+                        '<input type="hidden" name="id" value="' + id + '">';
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+
+function deleteCategory(id) {
+    if (confirm('Diese Kategorie wirklich löschen?')) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.innerHTML = '<input type="hidden" name="section" value="transaction_categories">' +
+                        '<input type="hidden" name="action" value="delete">' +
+                        '<input type="hidden" name="id" value="' + id + '">';
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+
+function deleteUser(id) {
+    if (confirm('Diesen Benutzer wirklich löschen?')) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.innerHTML = '<input type="hidden" name="section" value="users">' +
+                        '<input type="hidden" name="action" value="delete">' +
+                        '<input type="hidden" name="id" value="' + id + '">';
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+
+function viewVersion(versionId) {
+    fetch('settings.php?ajax=view_version&version_id=' + versionId, { credentials: 'same-origin' })
+        .then(r => r.text())
+        .then(html => {
+            const modal = document.createElement('div');
+            modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;';
+            modal.innerHTML = '<div style="background: white; padding: 2rem; border-radius: 8px; max-width: 800px; max-height: 80vh; overflow: auto; box-shadow: 0 4px 16px rgba(0,0,0,0.2);">' +
+                             '<button onclick="this.closest(\'div\').parentElement.remove()" style="float: right; background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #999;">×</button>' +
+                             html +
+                             '</div>';
+            document.body.appendChild(modal);
+        })
+        .catch(err => alert('Fehler beim Laden der Version'));
+}
+
+// Initialize on DOM ready
+document.addEventListener('DOMContentLoaded', () => {
+    // Ensure all expected tab containers exist; create placeholders if missing
+    const order = ['email-tab','organization-tab','social-tab','fees-tab','categories-tab','privacy_policy-tab','users-tab'];
+    const nav = document.querySelector('.settings-tabs');
+    let anchor = nav;
+    order.forEach((id) => {
+        let el = document.getElementById(id);
+        if (!el) {
+            el = document.createElement('div');
+            el.id = id;
+            el.className = 'tab-content';
+            el.innerHTML = '<div style="padding: 1rem; color: #999;">Inhalt konnte nicht geladen werden.</div>';
+            (anchor || document.body).insertAdjacentElement('afterend', el);
+        }
+        anchor = el;
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab') || 'email';
+    showTab(tab);
+
+    // Simple client-side filter for user list
+    const userSearch = document.getElementById('userSearch');
+    const userList = document.getElementById('userList');
+    if (userSearch && userList) {
+        userSearch.addEventListener('input', () => {
+            const q = userSearch.value.toLowerCase();
+            userList.querySelectorAll('.user-list-item').forEach(li => {
+                const name = (li.getAttribute('data-name') || '').toLowerCase();
+                li.style.display = name.includes(q) ? '' : 'none';
+            });
+        });
+
+        // Intercept clicks on user list and load details via AJAX
+        userList.addEventListener('click', (e) => {
+            const link = e.target.closest('.user-list-link');
+            if (!link) return;
+            e.preventDefault();
+            const targetUrl = new URL(link.href, window.location.origin);
+            const userId = targetUrl.searchParams.get('user_id');
+            if (!userId) return;
+            const ajaxUrl = new URL(window.location.href);
+            ajaxUrl.searchParams.set('ajax', 'user_detail');
+            ajaxUrl.searchParams.set('user_id', userId);
+            fetch(ajaxUrl.toString(), { credentials: 'same-origin' })
+                .then(r => r.text())
+                .then(html => {
+                    const panel = document.getElementById('userDetailContent');
+                    if (panel) panel.innerHTML = html;
+                    // Update active highlight
+                    userList.querySelectorAll('.user-list-item').forEach(li => li.classList.remove('active'));
+                    const li = link.closest('.user-list-item');
+                    if (li) li.classList.add('active');
+                    // Persist URL and tab without reload
+                    const newUrl = new URL(window.location.href);
+                    newUrl.searchParams.set('tab', 'users');
+                    newUrl.searchParams.set('user_id', userId);
+                    newUrl.searchParams.delete('ajax');
+                    history.pushState({ userId }, '', newUrl.toString());
+                    showTab('users');
+                })
+                .catch(err => console.error('Load user detail failed:', err));
+        });
+    }
+
+    // Handle back/forward navigation to reload details
+    window.addEventListener('popstate', () => {
+        const panel = document.getElementById('userDetailContent');
+        const userId = new URLSearchParams(window.location.search).get('user_id');
+        if (!panel || !userId) return;
+        const ajaxUrl = new URL(window.location.href);
+        ajaxUrl.searchParams.set('ajax', 'user_detail');
+        ajaxUrl.searchParams.set('user_id', userId);
+        fetch(ajaxUrl.toString(), { credentials: 'same-origin' })
+            .then(r => r.text())
+            .then(html => { panel.innerHTML = html; showTab('users'); })
+            .catch(() => {});
+    });
+});
+</script>
 
 <?php if (isset($success)): ?>
     <div class="alert alert-success"><?php echo $success; ?></div>
@@ -527,6 +797,7 @@ if (isset($_SESSION['success_message'])) {
     <button class="tab-btn" onclick="showTab('social')">Social Media</button>
     <button class="tab-btn" onclick="showTab('fees')">Beitragssätze</button>
     <button class="tab-btn" onclick="showTab('categories')">Kategorien</button>
+    <button class="tab-btn" onclick="showTab('privacy_policy')">Datenschutz</button>
     <button class="tab-btn" onclick="showTab('users')">Benutzer & Berechtigungen</button>
 </div>
 
@@ -963,11 +1234,214 @@ if (isset($_SESSION['success_message'])) {
     </form>
 </div>
 
+<!-- Privacy Policy Tab -->
+<div id="privacy_policy-tab" class="tab-content">
+    <h2>Datenschutzerklärung verwalten</h2>
+    <p style="color: #666; margin-bottom: 20px;">Erstellen, bearbeiten und veröffentlichen Sie neue Versionen der Datenschutzerklärung. Benutzer müssen neue Versionen beim nächsten Login akzeptieren.</p>
+    <?php if (!is_admin()): ?>
+        <div class="alert alert-error">Sie haben keine Berechtigung, die Datenschutzerklärung zu verwalten.</div>
+    <?php else: ?>
+    <?php try { ?>
+    
+    <?php
+    // Get all privacy policy versions
+    $stmt = $db->query("SELECT * FROM privacy_policy_versions ORDER BY 
+                       (CASE WHEN published_at IS NULL THEN 0 ELSE 1 END) DESC,
+                       published_at DESC, version DESC");
+    $all_versions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Get current active version
+    $current_version = null;
+    $draft_version = null;
+    foreach ($all_versions as $v) {
+        if (!$current_version && $v['published_at']) {
+            $current_version = $v;
+        }
+        if (!$draft_version && !$v['published_at']) {
+            $draft_version = $v;
+        }
+    }
+    ?>
+    
+    <div style="background: #f8f9fa; padding: 1rem; border-radius: 8px; margin-bottom: 2rem;">
+        <h3 style="margin-top: 0;">Status der Datenschutzerklärung</h3>
+        <?php if ($current_version): ?>
+            <div style="background: white; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; border-left: 4px solid #4caf50;">
+                <strong style="color: #4caf50;">✓ Aktive Version:</strong> 
+                <span style="font-weight: 600;">v<?php echo htmlspecialchars($current_version['version']); ?></span>
+                seit <?php echo date('d.m.Y', strtotime($current_version['published_at'])); ?>
+                <?php
+                // Count users who accepted this version
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM privacy_policy_consent 
+                                     WHERE policy_version_id = ? AND accepted = 1");
+                $stmt->execute([$current_version['id']]);
+                $accepted = $stmt->fetch()['count'];
+                
+                $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE active = 1");
+                $total = $stmt->fetch()['count'];
+                ?>
+                <br><small style="color: #666;">Akzeptiert von <strong><?php echo $accepted; ?></strong> von <strong><?php echo $total; ?></strong> Benutzern</small>
+            </div>
+        <?php else: ?>
+            <div style="background: white; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; border-left: 4px solid #ff9800;">
+                <strong style="color: #ff9800;">⚠ Keine aktive Version</strong><br>
+                <small style="color: #666;">Sie müssen eine Version veröffentlichen, bevor Benutzer sie akzeptieren können.</small>
+            </div>
+        <?php endif; ?>
+        
+        <?php if ($draft_version): ?>
+            <div style="background: white; padding: 1rem; border-radius: 6px; border-left: 4px solid #2196f3;">
+                <strong style="color: #2196f3;">✎ Entwurf:</strong> 
+                <span style="font-weight: 600;">v<?php echo htmlspecialchars($draft_version['version']); ?></span>
+                erstellt am <?php echo date('d.m.Y', strtotime($draft_version['created_at'])); ?>
+            </div>
+        <?php else: ?>
+            <div style="background: white; padding: 1rem; border-radius: 6px; border-left: 4px solid #999;">
+                <small style="color: #666;">Kein Entwurf vorhanden. Klicken Sie auf "Neue Version erstellen" um zu beginnen.</small>
+            </div>
+        <?php endif; ?>
+    </div>
+    
+    <!-- Create/Edit Draft Section -->
+    <?php if ($draft_version): ?>
+        <div style="background: white; padding: 2rem; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 2rem;">
+            <h3 style="margin-top: 0; color: #2196f3;">Entwurf bearbeiten (v<?php echo htmlspecialchars($draft_version['version']); ?>)</h3>
+            
+            <form method="POST" novalidate>
+                <input type="hidden" name="section" value="privacy_policy">
+                <input type="hidden" name="action" value="save_draft">
+                <input type="hidden" name="version_id" value="<?php echo $draft_version['id']; ?>">
+                
+                <div style="margin-bottom: 1rem;">
+                    <label style="display: block; margin-bottom: 8px; font-weight: bold;">Zusammenfassung (kurze Beschreibung)</label>
+                    <textarea name="summary" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; font-size: 0.9rem; height: 80px;" placeholder="z.B. Erste Version, überarbeitete Datenschutzerklärung..."><?php echo htmlspecialchars($draft_version['summary'] ?? ''); ?></textarea>
+                </div>
+                
+                <div style="margin-bottom: 1rem;">
+                    <label style="display: block; margin-bottom: 8px; font-weight: bold;">Datenschutzerklärung (Inhalt)</label>
+                    <textarea name="content" style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; font-size: 0.9rem; height: 400px;"><?php echo htmlspecialchars($draft_version['content']); ?></textarea>
+                </div>
+                
+                <div style="display: flex; gap: 1rem; align-items: center;">
+                    <button type="submit" name="action" value="save_draft" class="btn btn-primary" style="padding: 0.75rem 1.5rem;">
+                        <i class="fas fa-save"></i> Entwurf speichern
+                    </button>
+                    
+                    <button type="submit" name="action" value="publish" class="btn btn-success" style="padding: 0.75rem 1.5rem;">
+                        <i class="fas fa-check-circle"></i> Veröffentlichen
+                    </button>
+                    
+                    <button type="button" onclick="
+                        if (!confirm('Diesen Entwurf wirklich löschen?')) return false;
+                        const form = document.querySelector('form');
+                        const input = document.createElement('input');
+                        input.type = 'hidden';
+                        input.name = 'action';
+                        input.value = 'delete_draft';
+                        form.appendChild(input);
+                        form.submit();
+                    " class="btn btn-danger" style="padding: 0.75rem 1.5rem;">
+                        <i class="fas fa-trash"></i> Entwurf löschen
+                    </button>
+                </div>
+            </form>
+        </div>
+    <?php else: ?>
+        <div style="background: #f0f7ff; padding: 1.5rem; border-radius: 8px; margin-bottom: 2rem; border-left: 4px solid #2196f3;">
+            <strong style="color: #2196f3;">Neue Version erstellen</strong><br>
+            <p style="margin: 0.5rem 0 0 0; color: #555;">Sie haben keinen Entwurf. Klicken Sie auf "Neue Version erstellen" um einen Entwurf basierend auf der aktuellen Version zu erstellen.</p>
+            <form method="POST" style="margin-top: 1rem;">
+                <input type="hidden" name="section" value="privacy_policy">
+                <input type="hidden" name="action" value="create_version">
+                <button type="submit" class="btn btn-primary" style="padding: 0.5rem 1rem;">
+                    <i class="fas fa-plus"></i> Neue Version erstellen
+                </button>
+            </form>
+        </div>
+    <?php endif; ?>
+    
+    <!-- Version History -->
+    <?php if (!empty($all_versions)): ?>
+        <div style="background: white; padding: 2rem; border-radius: 8px; border: 1px solid #ddd;">
+            <h3 style="margin-top: 0;">Versionshistorie</h3>
+            <table class="data-table" style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="background: #f5f5f5; border-bottom: 2px solid #ddd;">
+                        <th style="padding: 12px; text-align: left;">Version</th>
+                        <th style="padding: 12px; text-align: left;">Status</th>
+                        <th style="padding: 12px; text-align: left;">Gültig ab</th>
+                        <th style="padding: 12px; text-align: left;">Erstellt am</th>
+                        <th style="padding: 12px; text-align: left;">Zusammenfassung</th>
+                        <th style="padding: 12px; text-align: center;">Akzeptiert</th>
+                        <th style="padding: 12px; text-align: center;">Aktion</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($all_versions as $version):
+                        $is_active = !is_null($version['published_at']);
+                        
+                        // Count acceptances for this version
+                        $stmt = $db->prepare("SELECT 
+                                            SUM(CASE WHEN accepted = 1 THEN 1 ELSE 0 END) as accepted,
+                                            SUM(CASE WHEN accepted = 0 THEN 1 ELSE 0 END) as rejected
+                                            FROM privacy_policy_consent WHERE policy_version_id = ?");
+                        $stmt->execute([$version['id']]);
+                        $consent = $stmt->fetch();
+                        $accepted_count = $consent['accepted'] ?? 0;
+                        $rejected_count = $consent['rejected'] ?? 0;
+                    ?>
+                    <tr style="border-bottom: 1px solid #eee; <?php echo $is_active ? 'background: #f0f8f0;' : ''; ?>">
+                        <td style="padding: 12px; font-weight: 600;">v<?php echo htmlspecialchars($version['version']); ?></td>
+                        <td style="padding: 12px;">
+                            <?php if ($is_active): ?>
+                                <span style="background: #4caf50; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem;">✓ Aktiv</span>
+                            <?php else: ?>
+                                <span style="background: #999; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.85rem;">Entwurf</span>
+                            <?php endif; ?>
+                        </td>
+                        <td style="padding: 12px;">
+                            <?php echo $is_active ? date('d.m.Y', strtotime($version['published_at'])) : '—'; ?>
+                        </td>
+                        <td style="padding: 12px; font-size: 0.9rem; color: #666;">
+                            <?php echo date('d.m.Y H:i', strtotime($version['created_at'])); ?>
+                        </td>
+                        <td style="padding: 12px; font-size: 0.9rem; color: #666;">
+                            <?php echo htmlspecialchars(substr($version['summary'] ?? '', 0, 50)); ?>
+                            <?php if (strlen($version['summary'] ?? '') > 50): ?>...<?php endif; ?>
+                        </td>
+                        <td style="padding: 12px; text-align: center; font-size: 0.9rem;">
+                            <span style="color: #4caf50; font-weight: 600;"><?php echo $accepted_count; ?></span> / 
+                            <span style="color: #f44336;"><?php echo $rejected_count; ?></span>
+                        </td>
+                        <td style="padding: 12px; text-align: center;">
+                            <button type="button" class="btn btn-sm btn-secondary" onclick="viewVersion(<?php echo $version['id']; ?>)" title="Version ansehen">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    <?php endif; ?>
+    <?php } catch (Throwable $e) { ?>
+        <div class="alert alert-error">
+            <strong>Fehler beim Laden des Datenschutz-Tabs:</strong><br>
+            <small><?php echo htmlspecialchars($e->getMessage()); ?></small>
+        </div>
+    <?php } ?>
+    <?php endif; ?>
+</div>
+
 <!-- Users Tab -->
 <div id="users-tab" class="tab-content">
     <h2>Benutzer & Berechtigungen verwalten</h2>
     <p style="color: #666; margin-bottom: 30px;">Verwalten Sie Benutzer und weisen Sie ihnen flexible Berechtigungen zu. Ein Benutzer kann mehrere Berechtigungen haben.</p>
-    
+
+    <?php if (!is_admin()): ?>
+        <div class="alert alert-error">Sie haben keine Berechtigung, Benutzer und Berechtigungen zu verwalten.</div>
+    <?php else: ?>
+    <?php try { ?>
     <?php
     // Get all permissions grouped by category
     $stmt = $db->query("SELECT * FROM permissions ORDER BY category, display_name");
@@ -1212,137 +1686,11 @@ if (isset($_SESSION['success_message'])) {
             </div>
         </div>
     </div>
+    <?php } catch (Throwable $e) { ?>
+        <div class="alert alert-error">Fehler beim Laden des Benutzer-Tabs.</div>
+    <?php } ?>
+    <?php endif; ?>
 </div>
-
-
-
-<script>
-function showTab(tab) {
-    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-    
-    if (tab === 'email') {
-        document.getElementById('email-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[0].classList.add('active');
-    } else if (tab === 'organization') {
-        document.getElementById('organization-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[1].classList.add('active');
-    } else if (tab === 'social') {
-        document.getElementById('social-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[2].classList.add('active');
-    } else if (tab === 'fees') {
-        document.getElementById('fees-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[3].classList.add('active');
-    } else if (tab === 'categories') {
-        document.getElementById('categories-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[4].classList.add('active');
-    } else if (tab === 'users') {
-        document.getElementById('users-tab').classList.add('active');
-        document.querySelectorAll('.tab-btn')[5].classList.add('active');
-    }
-}
-
-// Activate tab from URL parameter on load + intercept user selection to avoid reload
-document.addEventListener('DOMContentLoaded', () => {
-    const params = new URLSearchParams(window.location.search);
-    const tab = params.get('tab');
-    if (tab) { showTab(tab); }
-
-    // Simple client-side filter for user list
-    const userSearch = document.getElementById('userSearch');
-    const userList = document.getElementById('userList');
-    if (userSearch && userList) {
-        userSearch.addEventListener('input', () => {
-            const q = userSearch.value.toLowerCase();
-            userList.querySelectorAll('.user-list-item').forEach(li => {
-                const name = (li.getAttribute('data-name') || '').toLowerCase();
-                li.style.display = name.includes(q) ? '' : 'none';
-            });
-        });
-
-        // Intercept clicks on user list and load details via AJAX
-        userList.addEventListener('click', (e) => {
-            const link = e.target.closest('.user-list-link');
-            if (!link) return;
-            e.preventDefault();
-            const targetUrl = new URL(link.href, window.location.origin);
-            const userId = targetUrl.searchParams.get('user_id');
-            if (!userId) return;
-            const ajaxUrl = new URL(window.location.href);
-            ajaxUrl.searchParams.set('ajax', 'user_detail');
-            ajaxUrl.searchParams.set('user_id', userId);
-            fetch(ajaxUrl.toString(), { credentials: 'same-origin' })
-                .then(r => r.text())
-                .then(html => {
-                    const panel = document.getElementById('userDetailContent');
-                    if (panel) panel.innerHTML = html;
-                    // Update active highlight
-                    userList.querySelectorAll('.user-list-item').forEach(li => li.classList.remove('active'));
-                    const li = link.closest('.user-list-item');
-                    if (li) li.classList.add('active');
-                    // Persist URL and tab without reload
-                    const newUrl = new URL(window.location.href);
-                    newUrl.searchParams.set('tab', 'users');
-                    newUrl.searchParams.set('user_id', userId);
-                    newUrl.searchParams.delete('ajax');
-                    history.pushState({ userId }, '', newUrl.toString());
-                    showTab('users');
-                })
-                .catch(err => console.error('Load user detail failed:', err));
-        });
-    }
-
-    // Handle back/forward navigation to reload details
-    window.addEventListener('popstate', () => {
-        const panel = document.getElementById('userDetailContent');
-        const userId = new URLSearchParams(window.location.search).get('user_id');
-        if (!panel || !userId) return;
-        const ajaxUrl = new URL(window.location.href);
-        ajaxUrl.searchParams.set('ajax', 'user_detail');
-        ajaxUrl.searchParams.set('user_id', userId);
-        fetch(ajaxUrl.toString(), { credentials: 'same-origin' })
-            .then(r => r.text())
-            .then(html => { panel.innerHTML = html; showTab('users'); })
-            .catch(() => {});
-    });
-});
-
-function deleteSocialMedia(id) {
-    if (confirm('Diesen Social Media Link löschen?')) {
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.innerHTML = '<input type="hidden" name="section" value="social_media">' +
-                        '<input type="hidden" name="action" value="delete">' +
-                        '<input type="hidden" name="id" value="' + id + '">';
-        document.body.appendChild(form);
-        form.submit();
-    }
-}
-
-function deleteCategory(id) {
-    if (confirm('Diese Kategorie wirklich löschen?')) {
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.innerHTML = '<input type="hidden" name="section" value="transaction_categories">' +
-                        '<input type="hidden" name="action" value="delete">' +
-                        '<input type="hidden" name="id" value="' + id + '">';
-        document.body.appendChild(form);
-        form.submit();
-    }
-}
-
-function deleteUser(id) {
-    if (confirm('Diesen Benutzer wirklich löschen?')) {
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.innerHTML = '<input type="hidden" name="section" value="users">' +
-                        '<input type="hidden" name="action" value="delete">' +
-                        '<input type="hidden" name="id" value="' + id + '">';
-        document.body.appendChild(form);
-        form.submit();
-    }
-}
-</script>
 
 <style>
 .settings-tabs {

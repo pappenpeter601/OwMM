@@ -1006,6 +1006,7 @@ function get_member_payment_status($member_id, $year) {
 function get_members_with_outstanding_payments($year) {
     $obligations = get_open_obligations($year);
     return $obligations;
+}
 
 /**
  * Generate a secure magic link token for a user
@@ -1187,4 +1188,151 @@ function cleanup_old_login_attempts($days_to_keep = 30, $pdo = null) {
     $stmt->execute([$days_to_keep]);
     return $stmt->rowCount();
 }
+
+/**
+ * Check if user has accepted the latest privacy policy
+ */
+function has_accepted_privacy_policy($user_id = null) {
+    if (!$user_id && !is_logged_in()) {
+        return false;
+    }
+    
+    if (!$user_id) {
+        $user_id = $_SESSION['user_id'];
+    }
+    
+    try {
+        $db = getDBConnection();
+        
+        // Get latest published privacy policy
+        $stmt = $db->prepare("
+            SELECT id FROM privacy_policy_versions 
+            WHERE published_at IS NOT NULL 
+            ORDER BY published_at DESC 
+            LIMIT 1
+        ");
+        $stmt->execute();
+        $policy = $stmt->fetch();
+        
+        if (!$policy) {
+            return true; // No policy published yet, so considered accepted
+        }
+        
+        // Check if user has accepted this version
+        $stmt = $db->prepare("
+            SELECT id FROM privacy_policy_consent 
+            WHERE user_id = ? AND policy_version_id = ? AND accepted = 1
+            LIMIT 1
+        ");
+        $stmt->execute([$user_id, $policy['id']]);
+        
+        return (bool)$stmt->fetch();
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+/**
+ * Get latest privacy policy version
+ */
+function get_latest_privacy_policy() {
+    try {
+        $db = getDBConnection();
+        $stmt = $db->prepare("
+            SELECT * FROM privacy_policy_versions 
+            WHERE published_at IS NOT NULL 
+            ORDER BY published_at DESC 
+            LIMIT 1
+        ");
+        $stmt->execute();
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        return null;
+    }
+}
+
+/**
+ * Record privacy policy acceptance or rejection
+ */
+function record_privacy_policy_decision($user_id, $policy_version_id, $accepted) {
+    try {
+        $db = getDBConnection();
+        
+        // Remove existing consent record if any
+        $stmt = $db->prepare("
+            DELETE FROM privacy_policy_consent 
+            WHERE user_id = ? AND policy_version_id = ?
+        ");
+        $stmt->execute([$user_id, $policy_version_id]);
+        
+        // Insert new consent record
+        $stmt = $db->prepare("
+            INSERT INTO privacy_policy_consent 
+            (user_id, policy_version_id, accepted, consent_date, ip_address, user_agent) 
+            VALUES (?, ?, ?, NOW(), ?, ?)
+        ");
+        $stmt->execute([
+            $user_id,
+            $policy_version_id,
+            $accepted ? 1 : 0,
+            $_SERVER['REMOTE_ADDR'] ?? '',
+            $_SERVER['HTTP_USER_AGENT'] ?? ''
+        ]);
+        
+        // Get policy version
+        $stmt = $db->prepare("SELECT version FROM privacy_policy_versions WHERE id = ?");
+        $stmt->execute([$policy_version_id]);
+        $policy = $stmt->fetch();
+        
+        if ($policy) {
+            // Update user's privacy policy acceptance status
+            $stmt = $db->prepare("
+                UPDATE users 
+                SET privacy_policy_accepted_version = ?,
+                    privacy_policy_accepted_at = NOW(),
+                    require_privacy_policy_acceptance = ?,
+                    active = ?
+                WHERE id = ?
+            ");
+            $stmt->execute([
+                $policy['version'],
+                0, // Clear the flag
+                $accepted ? 1 : 0, // Disable user if rejected
+                $user_id
+            ]);
+        }
+        
+        return true;
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+/**
+ * Check if user is a supporter
+ */
+function is_supporter($user_id = null) {
+    if (!$user_id && !is_logged_in()) {
+        return false;
+    }
+    
+    if (!$user_id) {
+        $user_id = $_SESSION['user_id'];
+    }
+    
+    try {
+        $db = getDBConnection();
+        
+        $stmt = $db->prepare("
+            SELECT m.member_type FROM users u
+            LEFT JOIN members m ON u.member_id = m.id
+            WHERE u.id = ?
+        ");
+        $stmt->execute([$user_id]);
+        $result = $stmt->fetch();
+        
+        return ($result && $result['member_type'] === 'supporter');
+    } catch (Exception $e) {
+        return false;
+    }
 }

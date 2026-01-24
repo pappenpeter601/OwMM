@@ -7,6 +7,19 @@
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
     <link rel="stylesheet" href="../assets/css/admin.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <?php 
+    // Only apply privacy policy CSS if actually on privacy_policy.php AND flag is set
+    $current_page = basename($_SERVER['PHP_SELF']);
+    if ($current_page === 'privacy_policy.php' && isset($_SESSION['show_privacy_policy_only']) && $_SESSION['show_privacy_policy_only']): 
+    ?>
+    <style>
+        /* Hide all sidebar navigation when on privacy policy page */
+        .sidebar-nav { display: none !important; }
+        .sidebar-footer a:not([href="logout.php"]) { display: none !important; }
+        .sidebar { background: #f5f5f5; opacity: 0.7; }
+        .main-content { margin-left: 0; width: 100%; }
+    </style>
+    <?php endif; ?>
 </head>
 <body>
     <div class="admin-wrapper">
@@ -18,9 +31,15 @@
             </div>
             
             <nav class="sidebar-nav">
+                <a href="profile.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'profile.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-user-circle"></i> Mein Profil
+                </a>
+                <?php if (is_admin() || has_permission('dashboard.php')): ?>
                 <a href="dashboard.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'dashboard.php' ? 'active' : ''; ?>">
                     <i class="fas fa-home"></i> Dashboard
                 </a>
+                <?php endif; ?>
+
                 
                 <?php if (can_edit_operations()): ?>
                 <a href="operations.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'operations.php' ? 'active' : ''; ?>">
@@ -50,6 +69,9 @@
                 <a href="content.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'content.php' ? 'active' : ''; ?>">
                     <i class="fas fa-file-alt"></i> Seiteninhalte
                 </a>
+                <?php endif; ?>
+                
+                <?php if (has_permission('board.php')): ?>
                 <a href="board.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'board.php' ? 'active' : ''; ?>">
                     <i class="fas fa-users"></i> Kommando
                 </a>

@@ -7,7 +7,10 @@
 require_once '../includes/functions.php';
 require_once '../includes/EmailService.php';
 
-check_auth();
+// Check permissions - only admins can configure email settings
+if (!is_logged_in() || !is_admin()) {
+    redirect('dashboard.php');
+}
 
 $pdo = getDBConnection();
 $success_message = '';

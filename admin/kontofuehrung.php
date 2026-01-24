@@ -4,7 +4,7 @@ require_once '../config/database.php';
 require_once '../includes/functions.php';
 
 // Check permissions
-if (!is_logged_in() || !can_edit_cash()) {
+if (!is_logged_in() || !has_permission('kontofuehrung.php')) {
     redirect('dashboard.php');
 }
 
