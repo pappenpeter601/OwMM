@@ -1,0 +1,111 @@
+# Calendar Module - Quick Fix Summary
+
+## Problems Identified & Fixed
+
+### 🔴 CRITICAL ISSUES (Were Preventing Calendar Use)
+
+1. **CalDAV Depth Header Bug**
+   - Depth header was added to ALL requests
+   - Should only be added to PROPFIND, REPORT, MKCOL
+   - **Status**: ✅ FIXED in dav_request() function
+
+2. **REPORT Query Failure**
+   - XML query had improper variable expansion
+   - Calendar listing was silently failing
+   - **Status**: ✅ FIXED with proper heredoc syntax
+
+3. **Missing Calendar Settings Table**
+   - Table not in schema.sql
+   - Calendar configuration couldn't save
+   - **Status**: ✅ FIXED - table added to schema and migration file created
+
+### 🟠 IMPORTANT ISSUES (Caused Compatibility Problems)
+
+4. **iCalendar Date Format Non-Compliance**
+   - Missing 'Z' suffix for UTC times
+   - RFC 5545 requires UTC designation
+   - **Status**: ✅ FIXED with proper `Ymd\THis\Z` format
+
+5. **Weak Error Handling**
+   - Silent failures, hard to debug
+   - No user-facing error messages
+   - **Status**: ✅ FIXED with enhanced logging and messages
+
+6. **SSL/HTTPS Configuration**
+   - Unnecessary auto-following of redirects
+   - **Status**: ✅ FIXED - FOLLOWLOCATION set to false
+
+### 🟢 NEW FEATURES (Added Functionality)
+
+7. **Missing .ics Upload Handler**
+   - No way to bulk import events
+   - **Status**: ✅ ADDED - Complete upload handler with validation
+
+## Code Changes Summary
+
+### Modified Files
+
+| File | Changes | Lines |
+|------|---------|-------|
+| admin/calendar.php | CalDAV fixes, upload handler, error handling | 398 |
+| database/schema.sql | Added calendar_settings table | 789+ |
+
+### Created Files
+
+| File | Purpose |
+|------|---------|
+| database/migration_calendar_settings.sql | Database migration for existing installations |
+| docs/CALENDAR_CALDAV_FIXES.md | Detailed technical documentation |
+
+## How to Deploy
+
+1. **Database**: Run migration or update with new schema.sql
+   ```sql
+   SOURCE migration_calendar_settings.sql;
+   ```
+
+2. **Files**: Replace admin/calendar.php with updated version
+
+3. **Configuration**: Go to Admin → Calendar → Settings and configure:
+   - Server URL (e.g., `https://owmm.de/baikal`)
+   - Calendar path (e.g., `/cal.php/calendars/owmm/owmm-kalender/`)
+   - Username and password
+
+4. **Testing**: Try creating, listing, and uploading calendar events
+
+## What Now Works
+
+✅ **List Calendar Events** - 60-day view using CalDAV REPORT queries
+✅ **Create Events** - Single event creation via CalDAV PUT
+✅ **Delete Events** - Event removal via CalDAV DELETE
+✅ **Upload .ics Files** - Bulk import of events from .ics files
+✅ **Error Handling** - Clear error messages and debug logging
+✅ **RFC Compliance** - Proper CalDAV and iCalendar format
+
+## Testing Commands
+
+Monitor debug output:
+```bash
+tail -f /var/log/php-fpm.log | grep "DEBUG calendar"
+```
+
+Or in PHP error log:
+```bash
+grep "DEBUG calendar" /home/bee/git/OwMM/logs/php-errors.log
+```
+
+Expected output:
+```
+DEBUG calendar.php: base_url = https://owmm.de/baikal
+DEBUG calendar.php: calendar_path = /cal.php/calendars/owmm/owmm-kalender/
+DEBUG calendar.php: collection = https://owmm.de/baikal/cal.php/calendars/owmm/owmm-kalender/
+DEBUG calendar.php: REPORT https://owmm.de/baikal/cal.php/calendars/owmm/owmm-kalender/ -> HTTP 207
+DEBUG calendar.php: PUT https://owmm.de/baikal/cal.php/calendars/owmm/owmm-kalender/abc123def456@owmm.de.ics -> HTTP 201
+```
+
+## Support Resources
+
+- RFC 4791: CalDAV Protocol
+- RFC 5545: iCalendar Format
+- Baikal Docs: https://sabre.io/baikal/
+- See detailed documentation in: docs/CALENDAR_CALDAV_FIXES.md

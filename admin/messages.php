@@ -4,7 +4,7 @@ require_once '../config/database.php';
 require_once '../includes/functions.php';
 
 // Check if user is admin
-if (!is_logged_in() || !has_role('admin')) {
+if (!is_logged_in() || !is_admin()) {
     redirect('dashboard.php');
 }
 

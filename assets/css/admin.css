@@ -84,6 +84,8 @@ body {
     position: fixed;
     height: 100vh;
     overflow-y: auto;
+    box-shadow: 2px 0 8px rgba(0,0,0,0.3);
+    z-index: 1000;
 }
 
 .sidebar-header {
@@ -93,6 +95,15 @@ body {
 
 .sidebar-header h2 {
     margin-bottom: 0.5rem;
+    color: var(--white);
+    font-weight: 600;
+}
+
+.sidebar-header p {
+    color: #ccc;
+    font-size: 0.95rem;
+    margin-bottom: 0.5rem;
+    margin: 0.5rem 0 0 0;
 }
 
 .user-role {

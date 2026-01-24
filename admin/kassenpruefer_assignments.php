@@ -4,13 +4,10 @@ require_once '../config/database.php';
 require_once '../includes/functions.php';
 
 session_start();
-check_auth();
 
-// Only admins can manage kassenprüfer assignments
-if (!has_role('admin')) {
-    $_SESSION['error'] = 'Zugriff verweigert.';
-    header('Location: dashboard.php');
-    exit;
+// Check permissions - only admins can manage kassenprüfer assignments
+if (!is_logged_in() || !is_admin()) {
+    redirect('dashboard.php');
 }
 
 $page_title = 'Kassenprüfer Verwaltung';

@@ -12,6 +12,85 @@ $page_title = 'Kalender';
 
 function b64d($s){$d = base64_decode($s, true); return $d!==false? $d: $s;}
 
+// Unescape iCalendar text (RFC 5545)
+function unescapeICalText($text) {
+    if (!$text) return '';
+    // Remove backslash escaping: \, becomes , and \\ becomes \
+    $text = str_replace('\\,', ',', $text);
+    $text = str_replace('\\;', ';', $text);
+    $text = str_replace('\\\\', '\\', $text);
+    $text = str_replace('\\n', "\n", $text);
+    return $text;
+}
+
+// Format iCalendar date to readable format
+function formatICalDate($dateStr) {
+    if (!$dateStr) return '';
+    
+    // Check if it's UTC (ends with Z)
+    $isUTC = substr($dateStr, -1) === 'Z';
+    
+    // Remove Z if present (UTC indicator)
+    $dateStr = rtrim($dateStr, 'Z');
+    
+    // Remove T separator if present (YYYYMMDDTHHmmss)
+    $dateStr = str_replace('T', '', $dateStr);
+    
+    // Parse format: 20260124170200 (YYYYMMDDHHmmss) or 20260124 (YYYYMMDD)
+    if (strlen($dateStr) === 8) {
+        // Date only (YYYYMMDD) - create with UTC timezone if detected
+        $tz = $isUTC ? new DateTimeZone('UTC') : null;
+        $timestamp = DateTime::createFromFormat('Ymd', $dateStr, $tz);
+        if ($timestamp && $isUTC) {
+            $timestamp->setTimezone(new DateTimeZone(date_default_timezone_get()));
+        }
+        if ($timestamp) return $timestamp->format('d.m.Y');
+    } else if (strlen($dateStr) === 14) {
+        // DateTime (YYYYMMDDHHmmss) - create with UTC timezone if detected
+        $tz = $isUTC ? new DateTimeZone('UTC') : null;
+        $timestamp = DateTime::createFromFormat('YmdHis', $dateStr, $tz);
+        if ($timestamp && $isUTC) {
+            $timestamp->setTimezone(new DateTimeZone(date_default_timezone_get()));
+        }
+        if ($timestamp) return $timestamp->format('d.m.Y H:i');
+    }
+    
+    return $dateStr;
+}
+
+// Parse iCalendar date to Unix timestamp for sorting
+function parseICalDate($dateStr) {
+    if (!$dateStr) return 0;
+    
+    // Detect if UTC (Z suffix)
+    $isUTC = substr($dateStr, -1) === 'Z';
+    
+    // Remove Z if present (UTC indicator)
+    $dateStr = rtrim($dateStr, 'Z');
+    
+    // Remove T separator if present
+    $dateStr = str_replace('T', '', $dateStr);
+    
+    // Create with UTC timezone if detected, then convert to server timezone
+    $tz = $isUTC ? new DateTimeZone('UTC') : null;
+    
+    // Parse format: 20260124170200 (YYYYMMDDHHmmss) or 20260124 (YYYYMMDD)
+    if (strlen($dateStr) === 8) {
+        $timestamp = DateTime::createFromFormat('Ymd', $dateStr, $tz);
+    } else if (strlen($dateStr) === 14) {
+        $timestamp = DateTime::createFromFormat('YmdHis', $dateStr, $tz);
+    } else {
+        return 0;
+    }
+    
+    // Convert UTC to server timezone
+    if ($timestamp && $isUTC) {
+        $timestamp->setTimezone(new DateTimeZone(date_default_timezone_get()));
+    }
+    
+    return $timestamp ? $timestamp->getTimestamp() : 0;
+}
+
 // Load settings
 $stmt = $db->query("SELECT * FROM calendar_settings ORDER BY id DESC LIMIT 1");
 $cfg = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -29,39 +108,160 @@ $collection = $base . '/' . $calendar_path;
 $user = $cfg['username'];
 $pass = b64d($cfg['password']);
 
+// Verify collection URL is properly formatted
+if (!$collection) {
+    $_SESSION['error'] = 'Kalender-Pfad ist nicht konfiguriert.';
+    header('Location: calendar_settings.php');
+    exit;
+}
+
 // Debug: Log the constructed collection URL
 error_log("DEBUG calendar.php: base_url = " . $cfg['base_url']);
 error_log("DEBUG calendar.php: calendar_path = " . $cfg['calendar_path']);
 error_log("DEBUG calendar.php: collection = " . $collection);
 
-// Helpers for CalDAV
-function dav_request($method, $url, $user, $pass, $headers = [], $body = null) {
+// Helpers for CalDAV - Proper HTTP request handling
+function dav_request($method, $url, $user, $pass, $headers = [], $body = null, $includeDepth = true) {
     $ch = curl_init($url);
-    $defaultHeaders = [
-        'Depth: 1'
-    ];
+    $defaultHeaders = [];
+    
+    // Only add Depth for PROPFIND, REPORT, and certain other methods
+    if ($includeDepth && in_array($method, ['PROPFIND', 'REPORT', 'MKCOL'])) {
+        $defaultHeaders[] = 'Depth: 1';
+    }
+    
     $headers = array_merge($defaultHeaders, $headers);
-    curl_setopt_array($ch, [
+    
+    $curlOpts = [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_USERPWD => $user . ':' . $pass,
+        CURLOPT_HTTPAUTH => CURLAUTH_DIGEST,  // Use Digest auth (required by Baikal)
         CURLOPT_CUSTOMREQUEST => $method,
         CURLOPT_HTTPHEADER => $headers,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_TIMEOUT => 20
-    ]);
+        CURLOPT_FOLLOWLOCATION => false,  // Don't auto-follow for CalDAV
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_VERBOSE => false
+    ];
+    
+    curl_setopt_array($ch, $curlOpts);
+    
     if ($body !== null) {
         curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
     }
+    
     $response = curl_exec($ch);
     $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $err = curl_error($ch);
+    $httpCode = (int)$status;
+    
+    error_log("DEBUG calendar.php: $method $url -> HTTP $httpCode");
+    if ($err) {
+        error_log("DEBUG calendar.php: curl_error: $err");
+    }
+    
     curl_close($ch);
-    return [$status, $response, $err];
+    return [$httpCode, $response, $err];
 }
 
 function ical_uid() { return bin2hex(random_bytes(8)) . '@owmm.de'; }
+
+// Handle file upload
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'upload') {
+    if (empty($_FILES['ics_file']) || $_FILES['ics_file']['error'] !== UPLOAD_ERR_OK) {
+        $error = 'Bitte wählen Sie eine .ics Datei aus.';
+    } else {
+        $file = $_FILES['ics_file'];
+        
+        // Validate file type
+        if (!in_array($file['type'], ['text/calendar', 'text/plain', 'application/octet-stream'])) {
+            $error = 'Bitte laden Sie eine .ics Datei hoch (text/calendar).';
+        } elseif (!str_ends_with(strtolower($file['name']), '.ics')) {
+            $error = 'Dateiname muss mit .ics enden.';
+        } else {
+            $content = file_get_contents($file['tmp_name']);
+            
+            // Parse iCalendar file for VEVENT components
+            $events = [];
+            if (preg_match_all('/BEGIN:VEVENT(.+?)END:VEVENT/s', $content, $matches)) {
+                foreach ($matches[1] as $eventBody) {
+                    $event = [];
+                    
+                    // Extract fields
+                    if (preg_match('/^SUMMARY:(.+)$/m', "BEGIN:VEVENT$eventBody", $m)) {
+                        $event['summary'] = trim($m[1]);
+                    }
+                    if (preg_match('/^DTSTART(?:;[^:]+)?:(.+)$/m', "BEGIN:VEVENT$eventBody", $m)) {
+                        $event['dtstart'] = trim($m[1]);
+                    }
+                    if (preg_match('/^DTEND(?:;[^:]+)?:(.+)$/m', "BEGIN:VEVENT$eventBody", $m)) {
+                        $event['dtend'] = trim($m[1]);
+                    }
+                    if (preg_match('/^UID:(.+)$/m', "BEGIN:VEVENT$eventBody", $m)) {
+                        $event['uid'] = trim($m[1]);
+                    } else {
+                        $event['uid'] = ical_uid();
+                    }
+                    if (preg_match('/^LOCATION:(.+)$/m', "BEGIN:VEVENT$eventBody", $m)) {
+                        $event['location'] = unescapeICalText(trim($m[1]));
+                    }
+                    if (preg_match('/^DESCRIPTION:(.+)$/m', "BEGIN:VEVENT$eventBody", $m)) {
+                        $event['description'] = unescapeICalText(trim($m[1]));
+                    }
+                    
+                    if (!empty($event['summary']) && !empty($event['dtstart']) && !empty($event['dtend'])) {
+                        $events[] = $event;
+                    }
+                }
+            }
+            
+            if (empty($events)) {
+                $error = 'Keine gültigen Ereignisse in der .ics Datei gefunden.';
+            } else {
+                $created = 0;
+                $failed = 0;
+                
+                foreach ($events as $evt) {
+                    $uid = $evt['uid'];
+                    $dtstart = $evt['dtstart'];
+                    $dtend = $evt['dtend'];
+                    $summary = $evt['summary'];
+                    $location = $evt['location'] ?? '';
+                    $description = $evt['description'] ?? '';
+                    
+                    // Build iCalendar
+                    $ical = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//OWMM//Calendar//DE\nBEGIN:VEVENT\nUID:$uid\nDTSTAMP:".gmdate('Ymd\THis\Z')."\nDTSTART:$dtstart\nDTEND:$dtend\nSUMMARY:".str_replace("\n"," ",$summary)."\n".
+                            ($location? "LOCATION:".str_replace("\n"," ",$location)."\n":"").
+                            ($description? "DESCRIPTION:".str_replace(["\n","\r"],['\\n',''], $description)."\n":"").
+                            "END:VEVENT\nEND:VCALENDAR\n";
+                    
+                    $objectUrl = rtrim($collection, '/') . '/' . $uid . '.ics';
+                    error_log("DEBUG calendar.php: Uploading event $uid to $objectUrl");
+                    
+                    [$status, $resp, $err] = dav_request('PUT', $objectUrl, $user, $pass, [
+                        'Content-Type: text/calendar; charset=utf-8'
+                    ], $ical, false);
+                    
+                    if ($status >= 200 && $status < 300) {
+                        $created++;
+                    } else {
+                        error_log("DEBUG calendar.php: Upload failed for $uid: HTTP $status - $resp");
+                        $failed++;
+                    }
+                }
+                
+                if ($failed === 0) {
+                    $_SESSION['success'] = "$created Ereignisse erfolgreich importiert.";
+                    header('Location: calendar.php');
+                    exit;
+                } else {
+                    $error = "$created erfolgreich, $failed fehlgeschlagen.";
+                }
+            }
+        }
+    }
+}
 
 // Handle create
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
@@ -70,25 +270,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
     $end = trim($_POST['end'] ?? '');
     $location = trim($_POST['location'] ?? '');
     $description = trim($_POST['description'] ?? '');
+    
     if ($summary && $start && $end) {
         $uid = ical_uid();
-        $dtstart = date('Ymd\THis', strtotime($start));
-        $dtend = date('Ymd\THis', strtotime($end));
+        $dtstart = date('Ymd\THis\Z', strtotime($start));
+        $dtend = date('Ymd\THis\Z', strtotime($end));
+        
+        // Build iCalendar with proper formatting
         $ical = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//OWMM//Calendar//DE\nBEGIN:VEVENT\nUID:$uid\nDTSTAMP:".gmdate('Ymd\THis\Z')."\nDTSTART:$dtstart\nDTEND:$dtend\nSUMMARY:".str_replace("\n"," ",$summary)."\n".
                 ($location? "LOCATION:".str_replace("\n"," ",$location)."\n":"").
                 ($description? "DESCRIPTION:".str_replace(["\n","\r"],['\\n',''], $description)."\n":"").
                 "END:VEVENT\nEND:VCALENDAR\n";
+        
         $objectUrl = rtrim($collection, '/') . '/' . $uid . '.ics';
         error_log("DEBUG calendar.php: Creating event at URL: " . $objectUrl);
+        
         [$status, $resp, $err] = dav_request('PUT', $objectUrl, $user, $pass, [
             'Content-Type: text/calendar; charset=utf-8'
-        ], $ical);
+        ], $ical, false);
+        
         if ($status >= 200 && $status < 300) {
             $_SESSION['success'] = 'Termin angelegt.';
             header('Location: calendar.php');
             exit;
         } else {
-            $error = 'Fehler beim Anlegen (HTTP '.$status.'): '.htmlspecialchars($err ?: $resp);
+            error_log("DEBUG calendar.php: Create failed: HTTP $status - " . substr($resp ?? '', 0, 200));
+            $error = 'Fehler beim Anlegen (HTTP '.$status.'): '.htmlspecialchars(substr($err ?: $resp ?: 'Unknown error', 0, 100));
         }
     } else {
         $error = 'Bitte mindestens Titel, Start und Ende ausfüllen.';
@@ -99,71 +306,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete') {
     $href = $_POST['href'] ?? '';
     if ($href) {
-        [$status, $resp, $err] = dav_request('DELETE', $href, $user, $pass);
+        [$status, $resp, $err] = dav_request('DELETE', $href, $user, $pass, [], null, false);
         if ($status >= 200 && $status < 300) {
             $_SESSION['success'] = 'Termin gelöscht.';
             header('Location: calendar.php');
             exit;
         } else {
-            $error = 'Löschen fehlgeschlagen (HTTP '.$status.'): '.htmlspecialchars($err ?: $resp);
+            error_log("DEBUG calendar.php: Delete failed for $href: HTTP $status - $resp");
+            $error = 'Löschen fehlgeschlagen (HTTP '.$status.'): '.htmlspecialchars(substr($err ?: $resp ?: 'Unknown error', 0, 100));
         }
     }
 }
 
-// Fetch events next 60 days via REPORT
-$from = gmdate('Ymd\THis\Z');
-$to = gmdate('Ymd\THis\Z', strtotime('+60 days'));
-$report = <<<XML
-<?xml version="1.0" encoding="utf-8" ?>
-<cal:calendar-query xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">
-  <d:prop>
-    <d:getetag/>
-    <cal:calendar-data/>
-  </d:prop>
-  <cal:filter>
-    <cal:comp-filter name="VCALENDAR">
-      <cal:comp-filter name="VEVENT">
-        <cal:time-range start="$from" end="$to"/>
-      </cal:comp-filter>
-    </cal:comp-filter>
-  </cal:filter>
-</cal:calendar-query>
-XML;
-
-[$st, $xml, $er] = dav_request('REPORT', $collection, $user, $pass, [
-    'Content-Type: application/xml; charset=utf-8'
-], $report);
-
+// Events will be loaded asynchronously via calendar_api.php
+// Set a flag to indicate async loading
+$loadEventsAsync = true;
 $items = [];
-if ($st >= 200 && $st < 300 && $xml) {
-    // Very light parsing: split by BEGIN:VEVENT
-    $dom = new DOMDocument();
-    libxml_use_internal_errors(true);
-    if ($dom->loadXML($xml)) {
-        $xpath = new DOMXPath($dom);
-        $xpath->registerNamespace('d','DAV:');
-        $xpath->registerNamespace('cal','urn:ietf:params:xml:ns:caldav');
-        foreach ($xpath->query('//d:response') as $resp) {
-            $href = $xpath->query('./d:href', $resp)->item(0)->textContent ?? '';
-            $cdata = $xpath->query('.//cal:calendar-data', $resp)->item(0)->textContent ?? '';
-            if ($cdata) {
-                // naive extraction of SUMMARY/DTSTART/DTEND
-                $summary = '';
-                if (preg_match('/^SUMMARY:(.+)$/m', $cdata, $m)) $summary = trim($m[1]);
-                $dtstart = '';
-                if (preg_match('/^DTSTART(?:;[^:]+)?:([^\r\n]+)/m', $cdata, $m)) $dtstart = $m[1];
-                $dtend = '';
-                if (preg_match('/^DTEND(?:;[^:]+)?:([^\r\n]+)/m', $cdata, $m)) $dtend = $m[1];
-                $items[] = [
-                    'href' => $href,
-                    'summary' => $summary,
-                    'dtstart' => $dtstart,
-                    'dtend' => $dtend
-                ];
-            }
-        }
-    }
-}
 
 include 'includes/header.php';
 ?>
@@ -193,38 +351,103 @@ include 'includes/header.php';
         <div style="margin-top:10px;"><button class="btn btn-primary" type="submit"><i class="fas fa-plus"></i> Anlegen</button></div>
     </form>
 
-    <h3>Kommende Termine (60 Tage)</h3>
-    <?php if (empty($items)): ?>
-        <div class="alert alert-info">Keine Termine gefunden oder Zugriff fehlgeschlagen.</div>
-    <?php else: ?>
-        <div class="data-table">
-            <table style="width:100%; border-collapse: collapse;">
-                <thead>
-                    <tr>
-                        <th style="text-align:left; padding:8px; border-bottom:1px solid #ddd;">Titel</th>
-                        <th style="text-align:left; padding:8px; border-bottom:1px solid #ddd;">Beginn</th>
-                        <th style="text-align:left; padding:8px; border-bottom:1px solid #ddd;">Ende</th>
-                        <th style="padding:8px; border-bottom:1px solid #ddd;">Aktionen</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($items as $it): ?>
-                    <tr>
-                        <td style="padding:8px; border-bottom:1px solid #f0f0f0;"><?php echo htmlspecialchars($it['summary']); ?></td>
-                        <td style="padding:8px; border-bottom:1px solid #f0f0f0;"><?php echo htmlspecialchars($it['dtstart']); ?></td>
-                        <td style="padding:8px; border-bottom:1px solid #f0f0f0;"><?php echo htmlspecialchars($it['dtend']); ?></td>
-                        <td style="padding:8px; border-bottom:1px solid #f0f0f0; text-align:center;">
-                            <form method="POST" onsubmit="return confirm('Sind Sie sicher?');" style="display:inline-block;">
-                                <input type="hidden" name="action" value="delete">
-                                <input type="hidden" name="href" value="<?php echo htmlspecialchars($it['href']); ?>">
-                                <button class="btn btn-danger btn-sm" type="submit"><i class="fas fa-trash"></i> Löschen</button>
-                            </form>
-                        </td>
-                    </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
+    <h3>Ereignisse aus .ics Datei importieren</h3>
+    <form method="POST" enctype="multipart/form-data" style="margin-bottom:20px;">
+        <input type="hidden" name="action" value="upload">
+        <div class="form-row" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+            <input class="form-control" style="flex:1; min-width:200px;" type="file" name="ics_file" accept=".ics" required>
+            <button class="btn btn-info" type="submit"><i class="fas fa-upload"></i> Importieren</button>
         </div>
-    <?php endif; ?>
+        <small style="display:block; margin-top:5px;">Laden Sie eine .ics Datei hoch um mehrere Ereignisse auf einmal zu importieren.</small>
+    </form>
+
+    <h3>Kommende Termine (60 Tage)</h3>
+    
+    <div id="events-container">
+        <div class="alert alert-info" style="text-align:center;">
+            <i class="fas fa-spinner fa-spin"></i> Termine werden geladen...
+        </div>
+    </div>
 </div>
+
+<script>
+// Load events asynchronously
+document.addEventListener('DOMContentLoaded', function() {
+    loadEvents();
+});
+
+function loadEvents() {
+    fetch('calendar_api.php')
+        .then(response => response.json())
+        .then(data => {
+            renderEvents(data.items);
+        })
+        .catch(error => {
+            console.error('Error loading events:', error);
+            document.getElementById('events-container').innerHTML = 
+                '<div class="alert alert-danger">Fehler beim Laden der Termine.</div>';
+        });
+}
+
+function renderEvents(items) {
+    const container = document.getElementById('events-container');
+    
+    if (items.length === 0) {
+        container.innerHTML = '<div class="alert alert-info">Keine Termine gefunden.</div>';
+        return;
+    }
+    
+    let html = `<div class="data-table">
+        <table style="width:100%; border-collapse: collapse;">
+            <thead>
+                <tr>
+                    <th style="text-align:left; padding:12px; border-bottom:2px solid #ddd;">Titel</th>
+                    <th style="text-align:left; padding:12px; border-bottom:2px solid #ddd;">Beginn</th>
+                    <th style="text-align:left; padding:12px; border-bottom:2px solid #ddd;">Ende</th>
+                    <th style="text-align:left; padding:12px; border-bottom:2px solid #ddd;">Ort</th>
+                    <th style="text-align:left; padding:12px; border-bottom:2px solid #ddd;">Beschreibung</th>
+                    <th style="text-align:center; padding:12px; border-bottom:2px solid #ddd;">Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>`;
+    
+    items.forEach(item => {
+        const description = item.description ? 
+            (item.description.substring(0, 100) + (item.description.length > 100 ? '...' : '')) : 
+            '<em style="color:#999;">—</em>';
+        const location = item.location || '<em style="color:#999;">—</em>';
+        
+        html += `<tr style="border-bottom:1px solid #f0f0f0;">
+            <td style="padding:12px; font-weight:bold; max-width:200px; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(item.summary)}</td>
+            <td style="padding:12px; white-space:nowrap;">${escapeHtml(item.dtstart_display)}</td>
+            <td style="padding:12px; white-space:nowrap;">${escapeHtml(item.dtend_display)}</td>
+            <td style="padding:12px; max-width:150px; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(location)}</td>
+            <td style="padding:12px; max-width:250px; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(description)}</td>
+            <td style="padding:12px; text-align:center;">
+                <form method="POST" onsubmit="return confirm('Sind Sie sicher?');" style="display:inline-block;">
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="href" value="${escapeHtml(item.href)}">
+                    <button class="btn btn-danger btn-sm" type="submit"><i class="fas fa-trash"></i> Löschen</button>
+                </form>
+            </td>
+        </tr>`;
+    });
+    
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    };
+    return text.replace(/[&<>"']/g, m => map[m]);
+}
+</script>
+
 <?php include 'includes/footer.php'; ?>

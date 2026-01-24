@@ -4,7 +4,7 @@ require_once '../config/database.php';
 require_once '../includes/functions.php';
 
 // Check if user is admin or kassenpruefer
-if (!is_logged_in() || !can_edit_cash()) {
+if (!is_logged_in() || !has_permission('outstanding_obligations.php')) {
     header('Location: login.php');
     exit;
 }

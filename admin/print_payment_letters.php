@@ -154,7 +154,7 @@ $currentDate = date('d.m.Y');
             background: white;
             width: 210mm;
             margin: 0 auto 20px;
-            padding: 12mm 18mm 12mm 18mm;
+            padding: 10mm 18mm 10mm 18mm;
             box-shadow: 0 2px 8px rgba(0,0,0,0.15);
             page-break-inside: avoid;
             page-break-after: auto;
@@ -167,8 +167,8 @@ $currentDate = date('d.m.Y');
         /* Letterhead */
         .letterhead {
             border-bottom: 2px solid #dc2626;
-            padding-bottom: 3mm;
-            margin-bottom: 6mm;
+            padding-bottom: 2mm;
+            margin-bottom: 4mm;
         }
         
         .letterhead .org-name {
@@ -186,8 +186,8 @@ $currentDate = date('d.m.Y');
         
         /* Address block */
         .address-window {
-            margin-bottom: 6mm;
-            margin-top: 25mm;
+            margin-bottom: 4mm;
+            margin-top: 20mm;
         }
         
         .sender-line {
@@ -206,22 +206,22 @@ $currentDate = date('d.m.Y');
         /* Letter content */
         .date-line {
             text-align: right;
-            margin-bottom: 4mm;
+            margin-bottom: 3mm;
             font-size: 9pt;
         }
         
         .subject {
             font-weight: bold;
             font-size: 10pt;
-            margin-bottom: 4mm;
+            margin-bottom: 3mm;
         }
         
         .salutation {
-            margin-bottom: 2mm;
+            margin-bottom: 1.5mm;
         }
         
         .content p {
-            margin-bottom: 2mm;
+            margin-bottom: 1.5mm;
             text-align: justify;
         }
         
@@ -229,13 +229,13 @@ $currentDate = date('d.m.Y');
             background: #e5e5e5;
             border: 1px solid #999;
             border-radius: 4px;
-            padding: 2mm;
-            margin: 3mm 0;
+            padding: 1.5mm;
+            margin: 2mm 0;
         }
         
         .info-box h3 {
             font-size: 10pt;
-            margin-bottom: 2mm;
+            margin-bottom: 1mm;
             color: #dc2626;
         }
         
@@ -305,11 +305,11 @@ $currentDate = date('d.m.Y');
         }
         
         .closing {
-            margin-top: 3mm;
+            margin-top: 2mm;
         }
         
         .signature-block {
-            margin-top: 5mm;
+            margin-top: 3mm;
         }
         
         /* Print styles */
@@ -326,7 +326,7 @@ $currentDate = date('d.m.Y');
             .letter-container {
                 box-shadow: none;
                 margin: 0;
-                padding: 12mm 18mm 12mm 18mm;
+                padding: 10mm 18mm 10mm 18mm;
                 width: 210mm;
                 page-break-inside: avoid;
                 page-break-after: auto;

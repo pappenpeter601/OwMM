@@ -9,7 +9,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // Check if user is admin or kassenpruefer
-if (!is_logged_in() || !can_edit_cash()) {
+if (!is_logged_in() || !has_permission('outstanding_obligations.php')) {
     header('Location: login.php');
     exit;
 }

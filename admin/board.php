@@ -9,7 +9,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // Check permissions
-if (!is_logged_in() || !can_edit_page_content()) {
+if (!is_logged_in() || !has_permission('board.php')) {
     redirect('dashboard.php');
 }
 

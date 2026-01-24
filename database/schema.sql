@@ -655,7 +655,8 @@ INSERT INTO `permissions` (`name`, `display_name`, `description`, `category`) VA
 ('outstanding_obligations.php', 'Offene Forderungen', 'Offene Forderungen verwalten', 'Finanzen'),
 ('payment_reminders.php', 'Zahlungserinnerungen', 'Zahlungserinnerungen versenden und Historie einsehen', 'Finanzen'),
 ('selfservice.php', 'Self-Service', 'Zugriff auf Organisationsdaten', 'Basic'),
-('calendar.php', 'Kalender', 'Gemeinsamen Kalender verwalten', 'Basic');
+('calendar.php', 'Kalender', 'Gemeinsamen Kalender verwalten', 'Basic')
+('dashboard.php','Dashboard','Dashboard','Basic');
 
 -- Grant admin user all permissions (assuming user id=1 is admin)
 INSERT INTO `user_permissions` (`user_id`, `permission_id`)
@@ -718,6 +719,54 @@ CREATE TABLE IF NOT EXISTS `obligation_items` (
   CONSTRAINT `obligation_items_ibfk_2` FOREIGN KEY (`item_id`) REFERENCES `items` (`id`) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Privacy Policy versions (stores different versions of the privacy policy)
+CREATE TABLE IF NOT EXISTS `privacy_policy_versions` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `version_number` varchar(20) NOT NULL COMMENT 'e.g., 1.0, 1.1, etc.',
+  `content` longtext NOT NULL COMMENT 'Full privacy policy content in German',
+  `summary` text COMMENT 'Brief summary of key points',
+  `effective_date` date NOT NULL COMMENT 'When this version becomes effective',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `version_number` (`version_number`),
+  KEY `effective_date` (`effective_date`),
+  KEY `created_by` (`created_by`),
+  CONSTRAINT `privacy_policy_versions_ibfk_1` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Stores different versions of privacy policy for audit trail';
+
+-- Privacy policy consent tracking (which users have accepted which versions)
+CREATE TABLE IF NOT EXISTS `privacy_policy_consent` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `policy_version_id` int(11) NOT NULL,
+  `consent` tinyint(1) NOT NULL COMMENT '1=accepted, 0=rejected',
+  `ip_address` varchar(45) DEFAULT NULL,
+  `user_agent` varchar(255) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `user_policy_version` (`user_id`, `policy_version_id`),
+  KEY `user_id` (`user_id`),
+  KEY `policy_version_id` (`policy_version_id`),
+  KEY `consent` (`consent`),
+  KEY `created_at` (`created_at`),
+  CONSTRAINT `privacy_policy_consent_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `privacy_policy_consent_ibfk_2` FOREIGN KEY (`policy_version_id`) REFERENCES `privacy_policy_versions` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Tracks user acceptance/rejection of privacy policies';
+
+-- Email consent tracking (opt-in/opt-out for email communications)
+CREATE TABLE IF NOT EXISTS `email_consent` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `consent` tinyint(1) NOT NULL DEFAULT 1 COMMENT '1=opted in, 0=opted out',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `user_id` (`user_id`),
+  KEY `consent` (`consent`),
+  CONSTRAINT `email_consent_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Tracks user consent for email communications';
+
 -- Self-service credentials (WiFi, accounts, etc.)
 CREATE TABLE IF NOT EXISTS `credentials` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -737,3 +786,23 @@ CREATE TABLE IF NOT EXISTS `credentials` (
   CONSTRAINT `credentials_ibfk_1` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
   CONSTRAINT `credentials_ibfk_2` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- CalDAV calendar settings (for integration with Baikal server)
+CREATE TABLE IF NOT EXISTS `calendar_settings` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `base_url` varchar(500) NOT NULL COMMENT 'Base URL of CalDAV server (e.g., https://example.com/baikal)',
+  `calendar_path` varchar(500) NOT NULL COMMENT 'Calendar collection path (e.g., /cal.php/calendars/user/calendar/)',
+  `username` varchar(255) NOT NULL COMMENT 'CalDAV username',
+  `password` text NOT NULL COMMENT 'Base64-encoded CalDAV password',
+  `display_name` varchar(255) DEFAULT 'Calendar' COMMENT 'Display name for the calendar',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `created_by` int(11) DEFAULT NULL,
+  `updated_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `created_by` (`created_by`),
+  KEY `updated_by` (`updated_by`),
+  CONSTRAINT `calendar_settings_ibfk_1` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `calendar_settings_ibfk_2` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='CalDAV calendar server configuration';
+

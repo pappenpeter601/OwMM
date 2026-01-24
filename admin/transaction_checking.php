@@ -4,13 +4,10 @@ require_once '../config/database.php';
 require_once '../includes/functions.php';
 
 session_start();
-check_auth();
 
-// Only admin and kassenpruefer can access
-if (!has_role('admin') && !has_role('kassenpruefer')) {
-    $_SESSION['error'] = 'Zugriff verweigert.';
-    header('Location: dashboard.php');
-    exit;
+// Check permissions - only admins and kassenprüfer
+if (!is_logged_in() || (!is_admin() && !has_permission('check_periods.php'))) {
+    redirect('dashboard.php');
 }
 
 $page_title = 'Transaktionen prüfen';

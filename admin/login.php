@@ -27,13 +27,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['user_id'] = $user['id'];
             $_SESSION['username'] = $user['username'];
             $_SESSION['is_admin'] = $user['is_admin'];
+            $_SESSION['first_name'] = $user['first_name'];
+            $_SESSION['last_name'] = $user['last_name'];
             $_SESSION['user_name'] = $user['first_name'] . ' ' . $user['last_name'];
             
             // Update last login
             $stmt = $db->prepare("UPDATE users SET last_login = NOW() WHERE id = :id");
             $stmt->execute(['id' => $user['id']]);
             
-            redirect('dashboard.php');
+            // Check if user needs to accept privacy policy
+            $stmt = $db->prepare("
+                SELECT ppv.id, ppv.version FROM privacy_policy_versions ppv
+                WHERE ppv.published_at IS NOT NULL
+                ORDER BY ppv.published_at DESC
+                LIMIT 1
+            ");
+            $stmt->execute();
+            $latest_policy = $stmt->fetch();
+            
+            if ($latest_policy) {
+                // Check if user has accepted this specific policy version
+                $stmt = $db->prepare("
+                    SELECT id FROM privacy_policy_consent 
+                    WHERE user_id = ? AND policy_version_id = ? AND accepted = 1
+                    LIMIT 1
+                ");
+                $stmt->execute([$user['id'], $latest_policy['id']]);
+                $accepted = $stmt->fetch();
+                
+                if (!$accepted) {
+                    // User must accept privacy policy before continuing
+                    redirect('privacy_policy.php?redirect=profile.php');
+                }
+            }
+            
+            // After privacy policy check is passed, redirect to profile as main landing page
+            redirect('profile.php');
         } else {
             $error = 'Ungültige Anmeldedaten';
         }
