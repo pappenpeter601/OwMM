@@ -1,0 +1,361 @@
+================================================================================
+DEPLOYMENT CHECKLIST - Files & Instructions
+================================================================================
+
+📦 FILES TO DEPLOY
+================================================================================
+
+NEW FILES (Deploy as-is):
+✓ admin/profile.php
+✓ admin/privacy_policy.php  
+✓ admin/manage_privacy_policies.php
+✓ database/migration_privacy_policy.sql
+✓ database/migration_initial_privacy_policy.sql
+✓ docs/PRIVACY_POLICY_SYSTEM.md
+✓ includes/PrivacyPolicyTemplate.php
+
+MODIFIED FILES (Replace existing):
+✓ admin/login.php
+✓ verify_magiclink.php
+✓ admin/dashboard.php
+✓ includes/functions.php
+
+DOCUMENTATION (For reference):
+✓ PRIVACY_POLICY_SETUP.txt
+✓ IMPLEMENTATION_SUMMARY.txt
+✓ IMPLEMENTATION_COMPLETE.txt
+
+================================================================================
+🗂️ DIRECTORY STRUCTURE AFTER DEPLOYMENT
+================================================================================
+
+OwMM/
+├── admin/
+│   ├── profile.php ........................ NEW
+│   ├── privacy_policy.php ................ NEW
+│   ├── manage_privacy_policies.php ........ NEW
+│   ├── login.php ......................... MODIFIED
+│   ├── dashboard.php ..................... MODIFIED
+│   └── [other existing files]
+├── database/
+│   ├── migration_privacy_policy.sql ....... NEW
+│   ├── migration_initial_privacy_policy.sql NEW
+│   └── [other existing migrations]
+├── docs/
+│   ├── PRIVACY_POLICY_SYSTEM.md .......... NEW
+│   └── [other existing docs]
+├── includes/
+│   ├── functions.php ..................... MODIFIED
+│   ├── PrivacyPolicyTemplate.php ......... NEW
+│   └── [other existing files]
+├── verify_magiclink.php .................. MODIFIED
+├── PRIVACY_POLICY_SETUP.txt ............. NEW (reference)
+├── IMPLEMENTATION_SUMMARY.txt ........... NEW (reference)
+├── IMPLEMENTATION_COMPLETE.txt .......... NEW (reference)
+└── [other existing files]
+
+================================================================================
+⚙️ DEPLOYMENT STEPS
+================================================================================
+
+STEP 1: BACKUP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Before any changes, backup:
+  • Database (full dump)
+  • Current code (zip or git)
+  • Any current privacy policy documents
+
+Commands:
+  $ mysqldump -u username -p database_name > backup_$(date +%Y%m%d).sql
+  $ git commit -m "Backup before privacy policy implementation"
+
+STEP 2: DATABASE MIGRATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CRITICAL: Run in order!
+
+1. Run migration_privacy_policy.sql
+   $ mysql -u username -p database_name < database/migration_privacy_policy.sql
+
+2. Run migration_initial_privacy_policy.sql
+   $ mysql -u username -p database_name < database/migration_initial_privacy_policy.sql
+
+Verify:
+  $ mysql -u username -p database_name -e "SHOW TABLES LIKE 'privacy%';"
+  $ mysql -u username -p database_name -e "SELECT COUNT(*) FROM privacy_policy_versions;"
+
+STEP 3: COPY NEW FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Copy to production server:
+
+admin/
+  ✓ profile.php
+  ✓ privacy_policy.php
+  ✓ manage_privacy_policies.php
+
+includes/
+  ✓ PrivacyPolicyTemplate.php
+
+docs/
+  ✓ PRIVACY_POLICY_SYSTEM.md
+
+database/
+  ✓ migration_privacy_policy.sql (already run)
+  ✓ migration_initial_privacy_policy.sql (already run)
+
+STEP 4: REPLACE MODIFIED FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Replace these files (have your original backups!):
+
+  ✓ admin/login.php
+  ✓ admin/dashboard.php
+  ✓ verify_magiclink.php
+  ✓ includes/functions.php
+
+Or use git:
+  $ git pull origin main (if using version control)
+
+STEP 5: SET FILE PERMISSIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Make sure files are readable by web server:
+
+$ chmod 644 admin/profile.php
+$ chmod 644 admin/privacy_policy.php
+$ chmod 644 admin/manage_privacy_policies.php
+$ chmod 644 includes/PrivacyPolicyTemplate.php
+
+STEP 6: VERIFY DEPLOYMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Check:
+  ✓ admin/profile.php loads (403 if not logged in)
+  ✓ admin/privacy_policy.php loads (403 if not logged in)
+  ✓ admin/manage_privacy_policies.php loads (403 if not admin)
+
+Test URLs:
+  https://yourdomain.com/admin/profile.php
+  https://yourdomain.com/admin/privacy_policy.php
+  https://yourdomain.com/admin/manage_privacy_policies.php
+
+STEP 7: CUSTOMIZE PRIVACY POLICY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Login as admin
+2. Navigate to: https://yourdomain.com/admin/manage_privacy_policies.php
+3. Click "Edit" on Version 1.0
+4. Update:
+   - Organization name and address
+   - Contact email and phone
+   - Data Protection Officer (if applicable)
+   - Specific processing activities
+   - Data retention periods
+5. Save changes
+
+STEP 8: TEST THE SYSTEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Test Cases:
+
+Test 1: Login with privacy policy
+  1. Try to log in (admin/login.php)
+  2. You should see privacy policy
+  3. Accept it
+  4. Should see dashboard
+  ✓ Privacy policy required
+
+Test 2: User rejection
+  1. Create test account
+  2. Try to log in
+  3. Reject privacy policy
+  4. Account should be deactivated
+  ✓ User cannot log back in
+
+Test 3: Supporter redirect
+  1. Login as supporter user
+  2. Should go to profile.php (not dashboard)
+  3. Should see personal data
+  4. Should see obligations
+  ✓ Supporter restricted
+
+Test 4: Admin access
+  1. Login as admin
+  2. Go to /admin/manage_privacy_policies.php
+  3. Should see policy management
+  ✓ Admin can manage policies
+
+Test 5: Profile editing
+  1. Go to /admin/profile.php
+  2. Update personal information
+  3. Save
+  4. Refresh page
+  5. Changes should persist
+  ✓ Profile edits work
+
+================================================================================
+📋 TESTING CHECKLIST (BEFORE GOING LIVE)
+================================================================================
+
+LOGIN SYSTEM
+  ☐ Regular password login shows privacy policy
+  ☐ Magic link login shows privacy policy
+  ☐ Both methods enforce acceptance
+  ☐ Rejected users cannot log in
+
+PRIVACY POLICY
+  ☐ Can view policy (admin/privacy_policy.php)
+  ☐ Can accept policy
+  ☐ Can reject policy
+  ☐ Can print policy
+  ☐ New version appears on login
+
+PROFILES
+  ☐ Can access profile (admin/profile.php)
+  ☐ Can edit personal information
+  ☐ Can update address
+  ☐ Can update IBAN
+  ☐ Can manage email preferences
+  ☐ Changes persist after logout/login
+
+SUPPORTER RESTRICTIONS
+  ☐ Supporter redirects to profile (not dashboard)
+  ☐ Supporter can see their data
+  ☐ Supporter can see their obligations
+  ☐ Admin can still access dashboard
+
+ADMIN FEATURES
+  ☐ Can access policy management page
+  ☐ Can create new policy versions
+  ☐ Can publish policies
+  ☐ Can view statistics
+  ☐ Can see users pending acceptance
+
+DATABASE
+  ☐ privacy_policy_versions table exists
+  ☐ privacy_policy_consent table exists
+  ☐ email_consent table exists
+  ☐ users table has new columns
+  ☐ Migration scripts ran without errors
+
+AUDIT TRAIL
+  ☐ Acceptances logged in database
+  ☐ IP addresses recorded
+  ☐ Timestamps accurate
+  ☐ User agent captured
+  ☐ Cannot delete consent records
+
+================================================================================
+🔄 ROLLBACK PROCEDURE (If needed)
+================================================================================
+
+If something goes wrong:
+
+1. STOP - Do not continue
+2. Restore database from backup:
+   $ mysql -u username -p database_name < backup_YYYYMMDD.sql
+3. Restore code files from backup:
+   - Restore original versions of modified files
+   - Remove new files (profile.php, privacy_policy.php, etc.)
+4. Verify system working:
+   - Test login
+   - Test existing features
+   - Check database
+5. Debug & Re-deploy:
+   - Identify issue
+   - Fix problem
+   - Test in staging first
+   - Deploy again
+
+================================================================================
+📊 POST-DEPLOYMENT MONITORING
+================================================================================
+
+First Week:
+  • Check error logs daily
+  • Monitor user logins
+  • Verify audit trail entries
+  • Check email alerts
+
+First Month:
+  • Monitor acceptance rates
+  • Check for user complaints
+  • Verify database performance
+  • Review audit logs
+
+Ongoing:
+  • Check audit logs weekly
+  • Update privacy policy as needed
+  • Train new staff
+  • Review statistics
+  • Keep backups current
+
+Commands to Monitor:
+  # Check latest consent records
+  SELECT * FROM privacy_policy_consent ORDER BY consent_date DESC LIMIT 10;
+
+  # Check rejection count
+  SELECT COUNT(*) FROM privacy_policy_consent WHERE accepted = 0;
+
+  # Check deactivated users
+  SELECT email FROM users WHERE active = 0 AND privacy_policy_accepted_at IS NOT NULL;
+
+================================================================================
+🔔 NOTIFICATION
+================================================================================
+
+Notify users about:
+  1. New privacy policy system
+  2. Profile page availability
+  3. Email preference settings
+  4. Consent requirements
+  5. How to access their data
+
+Template email:
+
+Subject: Neue Datenschutzerklärung und Profilverwaltung
+
+Liebe Mitglieder,
+
+wir haben ein neues Datenschutz- und Datenverwaltungssystem implementiert, 
+um Ihre Datenschutzrechte zu stärken. Beim nächsten Login werden Sie gebeten, 
+unserer Datenschutzerklärung zuzustimmen.
+
+Sie können jederzeit Ihr Profil anpassen:
+- Persönliche Daten ansehen und aktualisieren
+- E-Mail-Einstellungen verwalten
+- Ihre Forderungen einsehen
+- Ihr Konto verwalten
+
+Mein Profil: https://yourdomain.com/admin/profile.php
+
+Mit freundlichen Grüßen,
+[Ihre Organisation]
+
+================================================================================
+✅ GO-LIVE CHECKLIST
+================================================================================
+
+Before announcing to users:
+  ☐ All migrations executed successfully
+  ☐ New files deployed and accessible
+  ☐ Modified files updated
+  ☐ Privacy policy customized
+  ☐ All test cases passed
+  ☐ No error logs
+  ☐ Database verified
+  ☐ Backup created
+  ☐ Documentation reviewed
+  ☐ Admin staff trained
+
+Ready to go live:
+  ☐ Notify users
+  ☐ Monitor first 48 hours closely
+  ☐ Have support ready
+  ☐ Be prepared for rollback
+
+================================================================================
+
+Questions during deployment?
+→ See: docs/PRIVACY_POLICY_SYSTEM.md
+→ See: PRIVACY_POLICY_SETUP.txt
+→ Check database for error logs
+→ Review error logs in web server
+
+Status: READY FOR DEPLOYMENT
+Last Updated: January 24, 2026
+================================================================================
