@@ -9,23 +9,85 @@ require_once 'config/database.php';
 require_once 'includes/functions.php';
 require_once 'includes/EmailService.php';
 
+// Format retry wait in user-friendly time
+if (!function_exists('format_retry_wait')) {
+    function format_retry_wait($seconds) {
+        if ($seconds < 60) {
+            return $seconds . ' Sekunde' . ($seconds !== 1 ? 'n' : '');
+        } elseif ($seconds < 3600) {
+            $minutes = ceil($seconds / 60);
+            return $minutes . ' Minute' . ($minutes !== 1 ? 'n' : '');
+        } else {
+            $hours = ceil($seconds / 3600);
+            return $hours . ' Stunde' . ($hours !== 1 ? 'n' : '');
+        }
+    }
+}
+
 $pdo = getDBConnection();
 $success_message = '';
 $error_message = '';
 
+// Initialize form timing (simple anti-bot: minimum fill time)
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $_SESSION['reg_form_time'] = time();
+}
+
 // Handle registration form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        $email = trim($_POST['email']);
-        $first_name = trim($_POST['first_name']);
-        $last_name = trim($_POST['last_name']);
+        // Log incoming POST for debugging
+        error_log('Register POST attempt: email=' . ($_POST['email'] ?? 'EMPTY') . 
+                  ' first_name=' . ($_POST['first_name'] ?? 'EMPTY') . 
+                  ' last_name=' . ($_POST['last_name'] ?? 'EMPTY'));
+        
+        // Anti-bot: honeypot field must stay empty
+        if (!empty($_POST['homepage'] ?? '')) {
+            error_log('Register: Honeypot field filled, rejecting as bot');
+            throw new Exception("Bitte bestätigen Sie, dass Sie kein Bot sind.");
+        }
+        
+        // Anti-bot: enforce minimal time on page before submit
+        $minSeconds = 4;
+        if (empty($_SESSION['reg_form_time']) || (time() - (int)$_SESSION['reg_form_time']) < $minSeconds) {
+            error_log('Register: Timing check failed (too fast). Form time: ' . ($_SESSION['reg_form_time'] ?? 'NOT_SET'));
+            throw new Exception("Bitte bestätigen Sie, dass Sie kein Bot sind.");
+        }
+
+        // Anti-bot: Cloudflare Turnstile server-side verification (if configured)
+        if (defined('TURNSTILE_SECRET_KEY') && TURNSTILE_SECRET_KEY !== '') {
+            $cfResponse = $_POST['cf-turnstile-response'] ?? '';
+            error_log('Register: Verifying Turnstile token (present: ' . (!empty($cfResponse) ? 'yes' : 'no') . ')');
+            if (!verify_turnstile_token($cfResponse)) {
+                error_log('Register: Turnstile verification failed');
+                throw new Exception("Bitte bestätigen Sie, dass Sie kein Bot sind.");
+            }
+        }
+
+        // Global IP rate limit: 3 registration attempts per hour
+        error_log('Register: Checking IP rate limit');
+        $rl = rate_limit_allow('register', 3, 60 * 60);
+        if (!$rl['allowed']) {
+            error_log('Register: IP rate limit exceeded. Retry after: ' . $rl['retry_after'] . 's');
+            $wait_time = format_retry_wait($rl['retry_after']);
+            throw new Exception("Zu viele Anfragen. Bitte warten Sie " . $wait_time . ".");
+        }
+
+        // Extract and sanitize form fields
+        $email = trim($_POST['email'] ?? '');
+        $first_name = trim($_POST['first_name'] ?? '');
+        $last_name = trim($_POST['last_name'] ?? '');
+        
+        error_log('Register: After extraction - email=' . $email . ' first_name=' . $first_name . ' last_name=' . $last_name);
         
         // Validate input
         if (empty($email) || empty($first_name) || empty($last_name)) {
+            error_log('Register: Validation failed - missing fields');
             throw new Exception("Bitte füllen Sie alle Felder aus.");
         }
         
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            error_log('Register: Invalid email format: ' . $email);
             throw new Exception("Ungültige E-Mail-Adresse.");
         }
         
@@ -33,6 +95,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $pdo->prepare("SELECT id FROM users WHERE email = ?");
         $stmt->execute([$email]);
         if ($stmt->fetch()) {
+            error_log('Register: Email already exists in users table: ' . $email);
             throw new Exception("Diese E-Mail-Adresse ist bereits registriert.");
         }
         
@@ -43,42 +106,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         if ($existing) {
             if ($existing['status'] === 'pending') {
+                error_log('Register: Pending registration already exists for: ' . $email);
                 throw new Exception("Für diese E-Mail-Adresse existiert bereits eine ausstehende Registrierungsanfrage.");
             }
             
             // Delete old approved/rejected request to allow re-registration
+            error_log('Register: Clearing old registration status for: ' . $email);
             $stmt = $pdo->prepare("DELETE FROM registration_requests WHERE email = ? AND status IN ('approved', 'rejected')");
             $stmt->execute([$email]);
         }
         
         // Generate verification token
-        $verification_token = bin2hex(random_bytes(32)); // Generate verification token
+        $verification_token = bin2hex(random_bytes(32));
         
         // Insert registration request
+        error_log('Register: Inserting registration request for: ' . $email);
         $stmt = $pdo->prepare("
             INSERT INTO registration_requests (email, first_name, last_name, token, status, created_at)
             VALUES (?, ?, ?, ?, 'pending', NOW())
         ");
-        $stmt->execute([$email, $first_name, $last_name, $verification_token]);
+        $stmt->execute([(string)$email, (string)$first_name, (string)$last_name, $verification_token]);
+        error_log('Register: Successfully inserted registration request for: ' . $email);
         
         // Send verification email to user
         $emailService = new EmailService();
         $result = $emailService->sendRegistrationConfirmation($email, $first_name, $verification_token);
         
         if (!$result['success']) {
-            error_log("Failed to send registration confirmation: " . $result['error']);
-            // Don't fail registration if email fails
+            error_log("Register: Failed to send confirmation email: " . $result['error']);
         }
         
         // Send notification to admin
         $adminResult = $emailService->sendAdminRegistrationNotification($email, $first_name, $last_name);
         
         $success_message = "Registrierung erfolgreich! Bitte überprüfen Sie Ihr E-Mail-Postfach und bestätigen Sie Ihre E-Mail-Adresse. Nach der Bestätigung wird ein Administrator Ihre Registrierung prüfen. <strong>⚠️ Hinweis: Kontrollieren Sie bitte auch den SPAM/Junk-Ordner Ihres E-Mail-Accounts, da Bestätigungsmails dort landen können.</strong>";
+        error_log('Register: Success - email verification sent to: ' . $email);
         
         // Clear form
         $_POST = [];
         
     } catch (Exception $e) {
+        error_log('Register: Exception caught - ' . $e->getMessage());
         $error_message = $e->getMessage();
     }
 }
@@ -97,7 +165,7 @@ include 'includes/header.php';
                 
                 <?php if ($success_message): ?>
                     <div class="alert alert-success">
-                        <?php echo htmlspecialchars($success_message); ?>
+                        <?php echo $success_message; ?>
                     </div>
                 <?php endif; ?>
                 
@@ -146,6 +214,19 @@ include 'includes/header.php';
                                    value="<?php echo htmlspecialchars($_POST['email'] ?? ''); ?>" 
                                    required>
                         </div>
+                        
+                        <!-- Honeypot field: should remain empty -->
+                        <div class="hp-field" aria-hidden="true">
+                            <label for="homepage">Homepage</label>
+                            <input type="text" id="homepage" name="homepage" tabindex="-1" autocomplete="off" value="">
+                        </div>
+
+                        <?php if (defined('TURNSTILE_SITE_KEY') && TURNSTILE_SITE_KEY !== ''): ?>
+                            <div class="form-group">
+                                <div class="cf-turnstile" data-sitekey="<?php echo htmlspecialchars(TURNSTILE_SITE_KEY); ?>"></div>
+                            </div>
+                            <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+                        <?php endif; ?>
                         
                         <button type="submit" class="btn btn-primary">Registrieren</button>
                     </form>
@@ -287,6 +368,15 @@ include 'includes/header.php';
 
 .info-box li {
     margin: 5px 0;
+}
+
+/* Hide honeypot field from real users but keep in DOM for bots */
+.hp-field {
+    position: absolute !important;
+    left: -5000px !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
 }
 
 @media (max-width: 600px) {

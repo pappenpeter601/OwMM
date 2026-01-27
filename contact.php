@@ -3,49 +3,102 @@ require_once 'config/config.php';
 require_once 'config/database.php';
 require_once 'includes/functions.php';
 
+// Format retry wait in user-friendly time
+if (!function_exists('format_retry_wait')) {
+    function format_retry_wait($seconds) {
+        if ($seconds < 60) {
+            return $seconds . ' Sekunde' . ($seconds !== 1 ? 'n' : '');
+        } elseif ($seconds < 3600) {
+            $minutes = ceil($seconds / 60);
+            return $minutes . ' Minute' . ($minutes !== 1 ? 'n' : '');
+        } else {
+            $hours = ceil($seconds / 3600);
+            return $hours . ' Stunde' . ($hours !== 1 ? 'n' : '');
+        }
+    }
+}
+
 $page_title = 'Kontakt - ' . get_org_setting('site_name');
 
 $success = false;
 $error = '';
 
+// Initialize form timing
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $_SESSION['contact_form_time'] = time();
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $name = sanitize_input($_POST['name'] ?? '');
-    $email = sanitize_input($_POST['email'] ?? '');
-    $phone = sanitize_input($_POST['phone'] ?? '');
-    $subject = sanitize_input($_POST['subject'] ?? '');
-    $message = $_POST['message'] ?? '';
-    
-    // Validate
-    if (empty($name) || empty($email) || empty($subject) || empty($message)) {
-        $error = 'Bitte füllen Sie alle Pflichtfelder aus.';
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $error = 'Bitte geben Sie eine gültige E-Mail-Adresse ein.';
-    } else {
-        // Save to database
-        $db = getDBConnection();
-        $stmt = $db->prepare("INSERT INTO contact_messages (name, email, phone, subject, message, ip_address) 
-                              VALUES (:name, :email, :phone, :subject, :message, :ip)");
-        
-        $stmt->execute([
-            'name' => $name,
-            'email' => $email,
-            'phone' => $phone,
-            'subject' => $subject,
-            'message' => $message,
-            'ip' => $_SERVER['REMOTE_ADDR']
-        ]);
-        
-        // Send email notification to admin
-        $email_message = "Neue Kontaktanfrage von der Website:\n\n";
-        $email_message .= "Name: $name\n";
-        $email_message .= "E-Mail: $email\n";
-        $email_message .= "Telefon: $phone\n";
-        $email_message .= "Betreff: $subject\n\n";
-        $email_message .= "Nachricht:\n$message\n";
-        
-        send_email(get_org_setting('admin_email'), "Neue Kontaktanfrage: $subject", $email_message);
-        
-        $success = true;
+    // Anti-bot: honeypot must remain empty
+    if (!empty($_POST['homepage'] ?? '')) {
+        $error = 'Bitte bestätigen Sie, dass Sie kein Bot sind.';
+    }
+
+    // Anti-bot: minimal time on page
+    if (!$error) {
+        $minSeconds = 4;
+        if (empty($_SESSION['contact_form_time']) || (time() - (int)$_SESSION['contact_form_time']) < $minSeconds) {
+            $error = 'Bitte bestätigen Sie, dass Sie kein Bot sind.';
+        }
+    }
+
+    // Anti-bot: optional Turnstile verification
+    if (!$error && defined('TURNSTILE_SECRET_KEY') && TURNSTILE_SECRET_KEY !== '') {
+        $cfResponse = $_POST['cf-turnstile-response'] ?? '';
+        if (!verify_turnstile_token($cfResponse)) {
+            $error = 'Bitte bestätigen Sie, dass Sie kein Bot sind.';
+        }
+    }
+
+    // Global IP rate limit: 5 messages per hour
+    if (!$error) {
+        $rl = rate_limit_allow('contact', 5, 60 * 60);
+        if (!$rl['allowed']) {
+            $wait_time = format_retry_wait($rl['retry_after']);
+            $error = 'Zu viele Anfragen. Bitte warten Sie ' . $wait_time . '.';
+        }
+    }
+
+    // Stop if any anti-bot or rate-limit error occurred
+    if (!$error) {
+        $name = sanitize_input($_POST['name'] ?? '');
+        $email = sanitize_input($_POST['email'] ?? '');
+        $phone = sanitize_input($_POST['phone'] ?? '');
+        $subject = sanitize_input($_POST['subject'] ?? '');
+        $message = $_POST['message'] ?? '';
+
+        // Validate
+        if (empty($name) || empty($email) || empty($subject) || empty($message)) {
+            $error = 'Bitte füllen Sie alle Pflichtfelder aus.';
+        } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $error = 'Bitte geben Sie eine gültige E-Mail-Adresse ein.';
+        } else {
+            // Save to database
+            $db = getDBConnection();
+            $stmt = $db->prepare("INSERT INTO contact_messages (name, email, phone, subject, message, ip_address) 
+                                  VALUES (:name, :email, :phone, :subject, :message, :ip)");
+            
+            $stmt->execute([
+                'name' => $name,
+                'email' => (string)$email,
+                'phone' => $phone,
+                'subject' => $subject,
+                'message' => $message,
+                'ip' => get_client_ip()
+            ]);
+            
+            // Send email notification to admin
+            $email_message = "Neue Kontaktanfrage von der Website:\n\n";
+            $email_message .= "Name: $name\n";
+            $email_message .= "E-Mail: $email\n";
+            $email_message .= "Telefon: $phone\n";
+            $email_message .= "Betreff: $subject\n\n";
+            $email_message .= "Nachricht:\n$message\n";
+            
+            send_email(get_org_setting('admin_email'), "Neue Kontaktanfrage: $subject", $email_message);
+            
+            $success = true;
+        }
     }
 }
 
@@ -53,6 +106,17 @@ $contact_info = get_page_content('contact_info');
 
 include 'includes/header.php';
 ?>
+
+<style>
+/* Hide honeypot field */
+.hp-field {
+    position: absolute !important;
+    left: -5000px !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+}
+</style>
 
 <section class="page-header-section">
     <div class="container">
@@ -151,6 +215,19 @@ include 'includes/header.php';
                         <label for="message">Nachricht *</label>
                         <textarea id="message" name="message" rows="6" required><?php echo htmlspecialchars($_POST['message'] ?? ''); ?></textarea>
                     </div>
+                    
+                    <!-- Honeypot field: should remain empty -->
+                    <div class="hp-field" aria-hidden="true">
+                        <label for="homepage">Homepage</label>
+                        <input type="text" id="homepage" name="homepage" tabindex="-1" autocomplete="off" value="">
+                    </div>
+
+                    <?php if (defined('TURNSTILE_SITE_KEY') && TURNSTILE_SITE_KEY !== ''): ?>
+                        <div class="form-group">
+                            <div class="cf-turnstile" data-sitekey="<?php echo htmlspecialchars(TURNSTILE_SITE_KEY); ?>"></div>
+                        </div>
+                        <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+                    <?php endif; ?>
                     
                     <button type="submit" class="btn btn-primary btn-lg">Nachricht senden</button>
                 </form>

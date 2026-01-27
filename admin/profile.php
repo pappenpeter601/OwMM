@@ -35,6 +35,7 @@ if ($user['member_id']) {
 
 // Get user's obligations
 $obligations = [];
+$latest_transaction_date = null;
 if ($user['member_id']) {
     $stmt = $db->prepare("
         SELECT * FROM member_fee_obligations 
@@ -43,6 +44,14 @@ if ($user['member_id']) {
     ");
     $stmt->execute([$user['member_id']]);
     $obligations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Get latest transaction date from all transactions
+    $stmt = $db->prepare("SELECT MAX(booking_date) as latest_date FROM transactions");
+    $stmt->execute();
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($result['latest_date']) {
+        $latest_transaction_date = new DateTime($result['latest_date']);
+    }
 }
 
 // Get email consent preferences
@@ -556,6 +565,12 @@ $has_dashboard_access = is_admin() || has_permission('dashboard.php');
             <p style="color: #666; margin-bottom: 15px;">
                 Übersicht Deiner offenen Mitgliedsbeiträge, Rechnungen und Guthaben.
             </p>
+            
+            <?php if ($latest_transaction_date): ?>
+                <div style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 12px; margin-bottom: 15px; border-radius: 4px; color: #1565c0; font-size: 0.9rem;">
+                    <strong>ℹ️ Stand der Buchungen:</strong> Kontoumsätze bis <?php echo $latest_transaction_date->format('d.m.Y'); ?> berücksichtigt, PayPal abweichend
+                </div>
+            <?php endif; ?>
             
             <table class="obligations-table">
                 <thead>

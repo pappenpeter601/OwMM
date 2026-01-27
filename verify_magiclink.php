@@ -51,13 +51,13 @@ if (empty($token)) {
         $stmt->execute([$token]);
         
         // Log successful login
-        $ip_address = $_SERVER['REMOTE_ADDR'];
+        $ip_address = get_client_ip();
         $stmt = $pdo->prepare("
             INSERT INTO login_attempts (email, ip_address, user_agent, success, method, created_at)
             VALUES (?, ?, ?, 1, 'magic_link', NOW())
         ");
         $stmt->execute([
-            $magic_link['email'],
+            (string)($magic_link['email'] ?? ''),
             $ip_address,
             $_SERVER['HTTP_USER_AGENT'] ?? ''
         ]);

@@ -9,6 +9,21 @@ require_once 'config/database.php';
 require_once 'includes/functions.php';
 require_once 'includes/EmailService.php';
 
+// Format retry wait in user-friendly time
+if (!function_exists('format_retry_wait')) {
+    function format_retry_wait($seconds) {
+        if ($seconds < 60) {
+            return $seconds . ' Sekunde' . ($seconds !== 1 ? 'n' : '');
+        } elseif ($seconds < 3600) {
+            $minutes = ceil($seconds / 60);
+            return $minutes . ' Minute' . ($minutes !== 1 ? 'n' : '');
+        } else {
+            $hours = ceil($seconds / 3600);
+            return $hours . ' Stunde' . ($hours !== 1 ? 'n' : '');
+        }
+    }
+}
+
 // Redirect if already logged in
 if (isset($_SESSION['user_id'])) {
     header('Location: admin/dashboard.php');
@@ -19,9 +34,40 @@ $pdo = getDBConnection();
 $success_message = '';
 $error_message = '';
 
+// Initialize form timing
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $_SESSION['ml_form_time'] = time();
+}
+
 // Handle magic link request
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
+        // Anti-bot: honeypot must remain empty
+        if (!empty($_POST['homepage'] ?? '')) {
+            throw new Exception("Bitte bestätigen Sie, dass Sie kein Bot sind.");
+        }
+
+        // Anti-bot: minimal time on page
+        $minSeconds = 3;
+        if (empty($_SESSION['ml_form_time']) || (time() - (int)$_SESSION['ml_form_time']) < $minSeconds) {
+            throw new Exception("Bitte bestätigen Sie, dass Sie kein Bot sind.");
+        }
+
+        // Anti-bot: optional Turnstile
+        if (defined('TURNSTILE_SECRET_KEY') && TURNSTILE_SECRET_KEY !== '') {
+            $cfResponse = $_POST['cf-turnstile-response'] ?? '';
+            if (!verify_turnstile_token($cfResponse)) {
+                throw new Exception("Bitte bestätigen Sie, dass Sie kein Bot sind.");
+            }
+        }
+
+        // Global IP rate limit: 5 requests per 10 minutes
+        $rl = rate_limit_allow('magiclink', 5, 10 * 60);
+        if (!$rl['allowed']) {
+            $wait_time = format_retry_wait($rl['retry_after']);
+            throw new Exception("Zu viele Anfragen. Bitte warten Sie " . $wait_time . ".");
+        }
+
         $email = trim($_POST['email']);
         
         if (empty($email)) {
@@ -33,7 +79,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         
         // Check rate limiting (max 3 requests per 15 minutes)
-        $ip_address = $_SERVER['REMOTE_ADDR'];
+        $ip_address = get_client_ip();
         $stmt = $pdo->prepare("
             SELECT COUNT(*) as attempt_count
             FROM login_attempts 
@@ -66,7 +112,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 INSERT INTO login_attempts (email, ip_address, user_agent, success, method, created_at)
                 VALUES (?, ?, ?, 0, 'magic_link', NOW())
             ");
-            $stmt->execute([$email, $ip_address, $_SERVER['HTTP_USER_AGENT'] ?? '']);
+                $stmt->execute([(string)$email, $ip_address, $_SERVER['HTTP_USER_AGENT'] ?? '']);
         } else {
             // Check if email is verified
             if (!$user['email_verified']) {
@@ -108,7 +154,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 INSERT INTO login_attempts (email, ip_address, user_agent, success, method, created_at)
                 VALUES (?, ?, ?, 1, 'magic_link', NOW())
             ");
-            $stmt->execute([$email, $ip_address, $_SERVER['HTTP_USER_AGENT'] ?? '']);
+                $stmt->execute([(string)$email, $ip_address, $_SERVER['HTTP_USER_AGENT'] ?? '']);
             
             $success_message = "Ein Magic Link wurde an Ihre E-Mail-Adresse gesendet. Der Link ist 15 Minuten gültig.";
         }
@@ -294,6 +340,15 @@ include 'includes/header.php';
 .admin-login-link a:hover {
     color: #d32f2f;
 }
+
+/* Hide honeypot field */
+.hp-field {
+    position: absolute !important;
+    left: -5000px !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+}
 </style>
 
 <div class="page-section">
@@ -327,6 +382,19 @@ include 'includes/header.php';
                            placeholder="ihre-email@example.com" 
                            required autofocus>
                 </div>
+                
+                <!-- Honeypot field: should remain empty -->
+                <div class="hp-field" aria-hidden="true">
+                    <label for="homepage">Homepage</label>
+                    <input type="text" id="homepage" name="homepage" tabindex="-1" autocomplete="off" value="">
+                </div>
+
+                <?php if (defined('TURNSTILE_SITE_KEY') && TURNSTILE_SITE_KEY !== ''): ?>
+                    <div class="form-group">
+                        <div class="cf-turnstile" data-sitekey="<?php echo htmlspecialchars(TURNSTILE_SITE_KEY); ?>"></div>
+                    </div>
+                    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+                <?php endif; ?>
                 
                 <button type="submit" class="btn-magic">Magic Link anfordern</button>
             </form>

@@ -1457,51 +1457,137 @@ document.addEventListener('DOMContentLoaded', () => {
         $permissions_by_category[$cat][] = $perm;
     }
     
-    // Reload users with is_admin column (include email for display)
+    // Reload users with member info and member_type
     $stmt = $db->query("SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.is_admin, u.last_login, u.member_id,
-                               m.first_name as member_first_name, m.last_name as member_last_name, m.member_number
+                               m.first_name as member_first_name, m.last_name as member_last_name, m.member_number, m.member_type
                         FROM users u 
                         LEFT JOIN members m ON u.member_id = m.id
                         WHERE u.active = 1 
-                        ORDER BY u.username");
+                        ORDER BY m.member_type DESC, u.username");
     $all_users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Group users by member_type and unlinked
+    $users_by_type = [];
+    $users_unlinked = [];
+    
+    foreach ($all_users as $user) {
+        if ($user['member_id'] === null) {
+            $users_unlinked[] = $user;
+        } else {
+            $type = $user['member_type'] ?? 'unknown';
+            if (!isset($users_by_type[$type])) {
+                $users_by_type[$type] = [];
+            }
+            $users_by_type[$type][] = $user;
+        }
+    }
+    
+    // Sort member_type groups naturally (active first, then others alphabetically)
+    uksort($users_by_type, function($a, $b) {
+        if ($a === 'active') return -1;
+        if ($b === 'active') return 1;
+        return strcasecmp($a, $b);
+    });
 
     // Determine selected user (from URL or default to first)
     $selected_user_id = isset($_GET['user_id']) ? (int)$_GET['user_id'] : null;
     $selected_user = null;
-    if (!empty($all_users)) {
-        if ($selected_user_id === null) {
-            $selected_user = $all_users[0];
+    
+    // Find selected user or default
+    foreach ($all_users as $u) {
+        if ($selected_user_id === null || (int)$u['id'] === $selected_user_id) {
+            $selected_user = $u;
             $selected_user_id = $selected_user['id'];
-        } else {
-            foreach ($all_users as $u) {
-                if ((int)$u['id'] === $selected_user_id) { $selected_user = $u; break; }
-            }
-            if ($selected_user === null) { $selected_user = $all_users[0]; $selected_user_id = $selected_user['id']; }
+            break;
         }
+    }
+    if ($selected_user === null && !empty($all_users)) {
+        $selected_user = $all_users[0];
+        $selected_user_id = $selected_user['id'];
     }
 
     ?>
 
     <div class="user-management">
         <div class="user-list-panel">
-            <h3 style="margin: 0 0 10px 0;">Benutzer</h3>
+            <h3 style="margin: 0 0 10px 0;">Benutzer nach Mitgliedertyp</h3>
             <div class="user-search-wrap">
                 <input type="text" id="userSearch" placeholder="Benutzer suchen…" aria-label="Benutzer suchen">
             </div>
-            <ul class="user-list" id="userList">
-                <?php foreach ($all_users as $u): ?>
-                    <?php $is_active = ((int)$u['id'] === (int)$selected_user_id); ?>
-                    <li class="user-list-item <?php echo $is_active ? 'active' : ''; ?>" data-name="<?php echo htmlspecialchars(($u['first_name'] . ' ' . $u['last_name'] . ' ' . $u['username'])); ?>">
-                        <a href="settings.php?tab=users&user_id=<?php echo (int)$u['id']; ?>" class="user-list-link">
-                            <span class="user-avatar" aria-hidden="true"><?php echo strtoupper(substr($u['first_name'] ?: $u['username'], 0, 1)); ?></span>
-                            <span class="user-primary"><?php echo htmlspecialchars($u['first_name'] . ' ' . $u['last_name']); ?></span>
-                            <span class="user-secondary">@<?php echo htmlspecialchars($u['username']); ?></span>
-                            <?php if ($u['is_admin']): ?><span class="user-badge">Admin</span><?php endif; ?>
-                        </a>
-                    </li>
+            
+            <div class="user-list-groups">
+                <!-- Unlinked Users Section (TOP) -->
+                <?php if (!empty($users_unlinked)): ?>
+                    <div class="user-group" data-group="unlinked">
+                        <div class="user-group-header" onclick="toggleUserGroup(this)">
+                            <span class="user-group-toggle">▼</span>
+                            <h4 style="color: #d32f2f; font-size: 0.95rem;">
+                                Nicht verknüpft
+                                <span class="group-count" style="background: #d32f2f; color: white; border-radius: 12px; padding: 2px 8px; font-size: 0.85rem; margin-left: 8px;">
+                                    <?php echo count($users_unlinked); ?>
+                                </span>
+                            </h4>
+                        </div>
+                        <ul class="user-list" data-group="unlinked">
+                            <?php foreach ($users_unlinked as $u): ?>
+                                <?php $is_active = ((int)$u['id'] === (int)$selected_user_id); ?>
+                                <li class="user-list-item <?php echo $is_active ? 'active' : ''; ?>" data-name="<?php echo htmlspecialchars(($u['first_name'] . ' ' . $u['last_name'] . ' ' . $u['username'])); ?>" data-user-id="<?php echo (int)$u['id']; ?>">
+                                    <a href="settings.php?tab=users&user_id=<?php echo (int)$u['id']; ?>" class="user-list-link">
+                                        <span class="user-avatar" style="background: #d32f2f;" aria-hidden="true"><?php echo strtoupper(substr($u['first_name'] ?: $u['username'], 0, 1)); ?></span>
+                                        <div class="user-info">
+                                            <span class="user-primary"><?php echo htmlspecialchars($u['first_name'] . ' ' . $u['last_name']); ?></span>
+                                            <span class="user-secondary">@<?php echo htmlspecialchars($u['username']); ?></span>
+                                        </div>
+                                        <?php if ($u['is_admin']): ?><span class="user-badge">Admin</span><?php endif; ?>
+                                    </a>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                <?php endif; ?>
+
+                <!-- Users linked to member_type groups -->
+                <?php foreach ($users_by_type as $member_type => $users): ?>
+                    <?php 
+                    // Color mapping for member types
+                    $colors = [
+                        'active' => '#2196f3',
+                        'pensioner' => '#9c27b0',
+                        'supporter' => '#ff9800'
+                    ];
+                    $badge_color = $colors[$member_type] ?? '#757575';
+                    ?>
+                    <div class="user-group" data-group="<?php echo htmlspecialchars($member_type); ?>">
+                        <div class="user-group-header" onclick="toggleUserGroup(this)">
+                            <span class="user-group-toggle">▼</span>
+                            <h4 style="text-transform: capitalize; color: #333; font-size: 0.95rem;">
+                                <?php echo htmlspecialchars(ucfirst($member_type)); ?>
+                                <span class="group-count" style="background: <?php echo $badge_color; ?>; color: white; border-radius: 12px; padding: 2px 8px; font-size: 0.85rem; margin-left: 8px;">
+                                    <?php echo count($users); ?>
+                                </span>
+                            </h4>
+                        </div>
+                        <ul class="user-list" data-group="<?php echo htmlspecialchars($member_type); ?>">
+                            <?php foreach ($users as $u): ?>
+                                <?php $is_active = ((int)$u['id'] === (int)$selected_user_id); ?>
+                                <li class="user-list-item <?php echo $is_active ? 'active' : ''; ?>" data-name="<?php echo htmlspecialchars(($u['first_name'] . ' ' . $u['last_name'] . ' ' . $u['username'])); ?>" data-user-id="<?php echo (int)$u['id']; ?>">
+                                    <a href="settings.php?tab=users&user_id=<?php echo (int)$u['id']; ?>" class="user-list-link">
+                                        <span class="user-avatar" style="background: <?php echo $badge_color; ?>;" aria-hidden="true"><?php echo strtoupper(substr($u['first_name'] ?: $u['username'], 0, 1)); ?></span>
+                                        <div class="user-info">
+                                            <span class="user-primary"><?php echo htmlspecialchars($u['first_name'] . ' ' . $u['last_name']); ?></span>
+                                            <span class="user-secondary">@<?php echo htmlspecialchars($u['username']); ?></span>
+                                            <?php if ($u['member_number']): ?>
+                                                <span class="user-member-number" style="font-size: 0.85rem; color: #999;">M#<?php echo htmlspecialchars($u['member_number']); ?></span>
+                                            <?php endif; ?>
+                                        </div>
+                                        <?php if ($u['is_admin']): ?><span class="user-badge">Admin</span><?php endif; ?>
+                                    </a>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
                 <?php endforeach; ?>
-            </ul>
+            </div>
         </div>
 
         <div class="user-detail-panel">
@@ -1795,12 +1881,76 @@ document.addEventListener('DOMContentLoaded', () => {
     list-style: none;
     margin: 0;
     padding: 0;
-    max-height: 60vh;
-    overflow: auto;
+}
+
+.user-list.collapsed {
+    display: none;
 }
 
 .user-list-item {
     margin: 0;
+}
+
+.user-group {
+    margin-bottom: 1.5rem;
+}
+
+.user-group:last-child {
+    margin-bottom: 0;
+}
+
+.user-group-header {
+    padding: 0.75rem 0.5rem;
+    background: #f5f5f5;
+    border-left: 3px solid #1976d2;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.user-group-header:hover {
+    background-color: #efefef;
+}
+
+/* Color coding by member_type */
+.user-group[data-group="active"] .user-group-header {
+    border-left-color: #2196f3;
+}
+
+.user-group[data-group="pensioner"] .user-group-header {
+    border-left-color: #9c27b0;
+}
+
+.user-group[data-group="supporter"] .user-group-header {
+    border-left-color: #ff9800;
+}
+
+.user-group[data-group="unlinked"] .user-group-header {
+    border-left-color: #d32f2f;
+}
+
+.user-group-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    transition: transform 0.2s;
+    color: #666;
+    font-size: 14px;
+}
+
+.user-group-header h4 {
+    margin: 0;
+    flex: 1;
+}
+
+.user-group-header.collapsed .user-group-toggle {
+    transform: rotate(-90deg);
 }
 
 .user-list-link {
@@ -1812,11 +1962,22 @@ document.addEventListener('DOMContentLoaded', () => {
     border-radius: 6px;
     color: inherit;
     text-decoration: none;
+    transition: background-color 0.2s;
+}
+
+.user-list-link:hover {
+    background-color: rgba(25, 118, 210, 0.1);
 }
 
 .user-list-item.active .user-list-link {
     background: #eef6ff;
     border: 1px solid #d5e9ff;
+}
+
+.user-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
 .user-avatar {
@@ -1852,5 +2013,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
 .user-add-section { margin-top: 2rem; }
 </style>
+
+<script>
+function toggleUserGroup(headerElement) {
+    const userList = headerElement.nextElementSibling;
+    if (userList && userList.classList.contains('user-list')) {
+        userList.classList.toggle('collapsed');
+        headerElement.classList.toggle('collapsed');
+    }
+}
+</script>
 
 <?php include 'includes/footer.php'; ?>

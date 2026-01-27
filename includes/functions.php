@@ -53,6 +53,147 @@ function sanitize_input($data) {
 }
 
 /**
+ * Get client IP (basic)
+ */
+function get_client_ip() {
+    if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
+        return $_SERVER['HTTP_CF_CONNECTING_IP'];
+    }
+    return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+}
+
+/**
+ * Verify Cloudflare Turnstile token. Returns true when either disabled or valid.
+ */
+function verify_turnstile_token($token) {
+    if (!defined('TURNSTILE_SECRET_KEY') || TURNSTILE_SECRET_KEY === '') {
+        return true; // Not configured -> treat as pass
+    }
+    if (empty($token)) {
+        return false;
+    }
+    $verifyUrl = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+    $data = [
+        'secret' => TURNSTILE_SECRET_KEY,
+        'response' => $token,
+        'remoteip' => get_client_ip(),
+    ];
+
+    // Prefer cURL; fallback to stream if unavailable
+    if (function_exists('curl_init')) {
+        $ch = curl_init($verifyUrl);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($data));
+        curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+        $result = curl_exec($ch);
+        if ($result === false) {
+            error_log('Turnstile verification CURL error: ' . curl_error($ch));
+        }
+        curl_close($ch);
+    } else {
+        $options = [
+            'http' => [
+                'method' => 'POST',
+                'header' => 'Content-type: application/x-www-form-urlencoded',
+                'content' => http_build_query($data),
+                'timeout' => 5,
+            ]
+        ];
+        $context = stream_context_create($options);
+        $result = @file_get_contents($verifyUrl, false, $context);
+        if ($result === false) {
+            error_log('Turnstile verification stream error');
+        }
+    }
+
+    if ($result === false) {
+        return false;
+    }
+    $decoded = json_decode($result, true);
+    if (!is_array($decoded) || empty($decoded['success'])) {
+        if (isset($decoded['error-codes'])) {
+            error_log('Turnstile verification failed: ' . implode(',', (array)$decoded['error-codes']));
+        }
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Format retry wait time in seconds to user-friendly string (minutes or hours)
+ */
+function format_retry_wait($seconds) {
+    if ($seconds < 60) {
+        return $seconds . ' Sekunde' . ($seconds !== 1 ? 'n' : '');
+    } elseif ($seconds < 3600) {
+        $minutes = ceil($seconds / 60);
+        return $minutes . ' Minute' . ($minutes !== 1 ? 'n' : '');
+    } else {
+        $hours = ceil($seconds / 3600);
+        return $hours . ' Stunde' . ($hours !== 1 ? 'n' : '');
+    }
+}
+
+/**
+ * File-based rate limiter per IP and action.
+ * Returns [allowed => bool, retry_after => int]
+ */
+function rate_limit_allow($action, $max, $windowSeconds) {
+    $ip = get_client_ip();
+    $dir = ROOT_PATH . '/logs/ratelimits';
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+    $now = time();
+    $key = sha1($action . '|' . $ip);
+    $file = $dir . '/' . $key . '.json';
+
+    $timestamps = [];
+    $fh = @fopen($file, 'c+');
+    if ($fh) {
+        if (flock($fh, LOCK_EX)) {
+            $size = filesize($file);
+            if ($size > 0) {
+                $raw = fread($fh, $size);
+                $data = json_decode($raw, true);
+                if (is_array($data)) {
+                    $timestamps = $data;
+                }
+            }
+            // prune old
+            $cutoff = $now - $windowSeconds;
+            $timestamps = array_values(array_filter($timestamps, function ($t) use ($cutoff) {
+                return (int)$t >= $cutoff;
+            }));
+
+            if (count($timestamps) >= $max) {
+                $oldest = (int)min($timestamps);
+                $retry_after = max(1, $windowSeconds - ($now - $oldest));
+                // keep file as-is
+                flock($fh, LOCK_UN);
+                fclose($fh);
+                return ['allowed' => false, 'retry_after' => $retry_after];
+            }
+
+            // allow and record
+            $timestamps[] = $now;
+            rewind($fh);
+            ftruncate($fh, 0);
+            fwrite($fh, json_encode($timestamps));
+            fflush($fh);
+            flock($fh, LOCK_UN);
+            fclose($fh);
+            return ['allowed' => true, 'retry_after' => 0];
+        } else {
+            fclose($fh);
+        }
+    }
+    // If locking fails, be permissive
+    return ['allowed' => true, 'retry_after' => 0];
+}
+
+/**
  * Check if user is logged in
  */
 function is_logged_in() {
@@ -1144,7 +1285,7 @@ function log_login_attempt($email, $success, $method = 'password', $pdo = null) 
         INSERT INTO login_attempts (email, ip_address, user_agent, success, method, created_at)
         VALUES (?, ?, ?, ?, ?, NOW())
     ");
-    return $stmt->execute([$email, $ip_address, $user_agent, (int)$success, $method]);
+    return $stmt->execute([(string)$email, $ip_address, $user_agent, (int)$success, $method]);
 }
 
 /**
