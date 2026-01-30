@@ -176,7 +176,14 @@ include 'includes/header.php';
                         <i class="fas fa-check-circle"></i>
                         Vielen Dank für Ihre Nachricht! Wir melden uns so schnell wie möglich bei Ihnen.
                     </div>
-                <?php endif; ?>
+                    <div style="margin-top: 20px; text-align: center;">
+                        <p style="color: #666; margin-bottom: 15px;">
+                            Ihre Nachricht wurde erfolgreich übermittelt. Ein Mitglied unseres Teams wird sich in Kürze mit Ihnen in Verbindung setzen.
+                        </p>
+                        <a href="index.php" class="btn btn-primary">Zurück zur Startseite</a>
+                        <a href="contact.php" class="btn btn-secondary" style="margin-left: 10px;">Neue Nachricht senden</a>
+                    </div>
+                <?php else: ?>
                 
                 <?php if ($error): ?>
                     <div class="alert alert-error">
@@ -185,7 +192,6 @@ include 'includes/header.php';
                     </div>
                 <?php endif; ?>
                 
-                <?php if (!$success): ?>
                 <form method="POST" action="" class="contact-form">
                     <div class="form-row">
                         <div class="form-group">

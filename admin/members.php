@@ -148,18 +148,18 @@ $sql = "SELECT m.*,
 $params = [];
 
 if ($filter_type !== 'all') {
-    $sql .= " AND m.member_type = ?";
-    $params[] = $filter_type;
+    $sql .= " AND m.member_type = :filter_type";
+    $params['filter_type'] = $filter_type;
 }
 
 if ($search) {
-    // Use positional parameters for the search
+    // Use unique named parameters for each search field
     $search_term = '%' . $search . '%';
-    $sql .= " AND (m.first_name LIKE ? OR m.last_name LIKE ? OR m.member_number LIKE ? OR m.email LIKE ?)";
-    $params[] = $search_term;
-    $params[] = $search_term;
-    $params[] = $search_term;
-    $params[] = $search_term;
+    $sql .= " AND (m.first_name LIKE :search_first OR m.last_name LIKE :search_last OR m.member_number LIKE :search_member OR m.email LIKE :search_email)";
+    $params['search_first'] = $search_term;
+    $params['search_last'] = $search_term;
+    $params['search_member'] = $search_term;
+    $params['search_email'] = $search_term;
 }
 
 $sql .= " ORDER BY m.active DESC, m.last_name, m.first_name";

@@ -176,15 +176,25 @@ if ($memberTypeFilter !== 'all') {
 }
 
 if (!empty($search)) {
-    $sql .= " AND (LOWER(m.first_name) LIKE :search OR LOWER(m.last_name) LIKE :search OR LOWER(m.member_number) LIKE :search)";
-    $params['search'] = '%' . strtolower($search) . '%';
+    $searchTerm = '%' . strtolower($search) . '%';
+    $sql .= " AND (LOWER(m.first_name) LIKE :search_first OR LOWER(m.last_name) LIKE :search_last OR LOWER(m.member_number) LIKE :search_member)";
+    $params['search_first'] = $searchTerm;
+    $params['search_last'] = $searchTerm;
+    $params['search_member'] = $searchTerm;
 }
 
 $sql .= " ORDER BY m.last_name, m.first_name";
 
 $stmt = $db->prepare($sql);
-$stmt->execute($params);
-$members = $stmt->fetchAll(PDO::FETCH_ASSOC);
+try {
+    $stmt->execute($params);
+    $members = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    error_log("Payment Reminders Query Error: " . $e->getMessage());
+    error_log("SQL: " . $sql);
+    error_log("Params: " . json_encode($params));
+    throw $e;
+}
 
 // Calculate statistics
 $totalOutstanding = array_sum(array_column($members, 'outstanding'));
@@ -702,11 +712,10 @@ function updateSelectionCount() {
     const count = checked.length;
     const contactSelected = document.getElementById('contact_member_id').value !== '';
     const hasWithEmail = Array.from(checked).some(cb => cb.dataset.hasEmail === '1');
-    const hasWithoutEmail = Array.from(checked).some(cb => cb.dataset.hasEmail === '0');
     
     document.getElementById('selectionCount').textContent = count + ' ausgewählt';
     document.getElementById('previewButton').disabled = count === 0 || !contactSelected || !hasWithEmail;
-    document.getElementById('printButton').disabled = count === 0 || !contactSelected || !hasWithoutEmail;
+    document.getElementById('printButton').disabled = count === 0 || !contactSelected;
 }
 
 // Print letters function
