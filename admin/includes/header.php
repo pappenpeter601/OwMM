@@ -1,3 +1,10 @@
+<?php
+// Force cache refresh
+header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
+header("Cache-Control: post-check=0, pre-check=0", false);
+header("Pragma: no-cache");
+header("Expires: 0");
+?>
 <!DOCTYPE html>
 <html lang="de">
 <head>
@@ -5,7 +12,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?php echo $page_title ?? 'Admin'; ?> - <?php echo get_org_setting('site_name'); ?></title>
     <link rel="icon" type="image/svg+xml" href="../favicon.svg">
-    <link rel="stylesheet" href="../assets/css/admin.css">
+    <link rel="stylesheet" href="../assets/css/admin.css?v=<?php echo time(); ?>">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <?php 
     // Only apply privacy policy CSS if actually on privacy_policy.php AND flag is set
@@ -20,6 +27,25 @@
         .main-content { margin-left: 0; width: 100%; }
     </style>
     <?php endif; ?>
+    <script>
+        function toggleSidebar() {
+            const sidebar = document.querySelector('.sidebar');
+            sidebar.classList.toggle('active');
+        }
+        
+        // Close sidebar when clicking outside on mobile
+        document.addEventListener('DOMContentLoaded', function() {
+            if (window.innerWidth <= 768) {
+                document.addEventListener('click', function(event) {
+                    const sidebar = document.querySelector('.sidebar');
+                    const toggle = document.querySelector('.mobile-menu-toggle');
+                    if (!sidebar.contains(event.target) && !toggle.contains(event.target)) {
+                        sidebar.classList.remove('active');
+                    }
+                });
+            }
+        });
+    </script>
 </head>
 <body>
     <div class="admin-wrapper">
@@ -135,6 +161,10 @@
                 </a>
             </div>
         </aside>
+        
+        <button class="mobile-menu-toggle" onclick="toggleSidebar()">
+            <i class="fas fa-bars"></i>
+        </button>
         
         <main class="main-content">
             <div class="container">

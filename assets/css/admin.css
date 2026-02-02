@@ -671,10 +671,36 @@ body {
 }
 
 /* Responsive */
+/* Mobile Menu Toggle */
+.mobile-menu-toggle {
+    display: none;
+    position: fixed;
+    top: 15px;
+    left: 15px;
+    z-index: 10000;
+    background: var(--primary-color);
+    border: none;
+    color: white;
+    padding: 10px 15px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1.2rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.mobile-menu-toggle:hover {
+    background: #c41c1c;
+}
+
 @media (max-width: 768px) {
+    .mobile-menu-toggle {
+        display: block;
+    }
+    
     .sidebar {
         transform: translateX(-100%);
         z-index: 9999;
+        transition: transform 0.3s ease;
     }
     
     .sidebar.active {
@@ -682,7 +708,18 @@ body {
     }
     
     .main-content {
-        margin-left: 0;
+        margin-left: 0 !important;
+        margin-top: 70px;
+        padding: 10px !important;
+        display: block;
+        width: 100%;
+        min-height: 100vh;
+    }
+    
+    .container {
+        width: 100%;
+        max-width: 100%;
+        padding: 0;
     }
     
     .dashboard-grid,
@@ -701,5 +738,80 @@ body {
     
     .table-responsive {
         font-size: 0.9rem;
+    }
+    
+    /* Profile page mobile styling */
+    .profile-container {
+        padding: 10px;
+        min-height: calc(100vh - 150px);
+        width: 100%;
+    }
+    
+    .profile-header {
+        flex-direction: column;
+        gap: 15px;
+        align-items: flex-start;
+        margin-bottom: 20px;
+    }
+    
+    .profile-header h1 {
+        width: 100%;
+    }
+    
+    .profile-actions {
+        width: 100%;
+        justify-content: stretch;
+        flex-direction: column;
+    }
+    
+    .profile-actions .btn {
+        width: 100%;
+        margin: 5px 0;
+    }
+    
+    .profile-section {
+        padding: 15px;
+        margin-bottom: 20px;
+    }
+    
+    .section-title {
+        font-size: 1.1rem;
+    }
+    
+    .info-grid {
+        grid-template-columns: 1fr;
+        gap: 15px;
+    }
+    
+    .info-item {
+        padding: 12px;
+    }
+    
+    .obligations-table {
+        font-size: 0.85rem;
+    }
+    
+    .obligations-table th,
+    .obligations-table td {
+        padding: 8px 4px;
+    }
+    
+    .edit-form {
+        padding: 15px;
+    }
+    }
+    
+    .info-grid {
+        grid-template-columns: 1fr;
+        gap: 15px;
+    }
+    
+    .obligations-table {
+        font-size: 0.9rem;
+    }
+    
+    .obligations-table th,
+    .obligations-table td {
+        padding: 8px 4px;
     }
 }

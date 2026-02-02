@@ -8,6 +8,15 @@ if (!is_logged_in()) {
     redirect('login.php');
 }
 
+// Add mobile styles for dashboard
+echo '<style>
+    @media (max-width: 768px) {
+        .disabled-permissions-section {
+            display: none !important;
+        }
+    }
+</style>';
+
 // Check dashboard permission
 if (!is_admin() && !has_permission('dashboard.php')) {
     redirect('profile.php');
@@ -47,6 +56,7 @@ $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_p
 </div>
 <?php endif; ?>
 
+<?php if (is_admin()): ?>
 <div class="quick-stats">
     <h2>Übersicht</h2>
     <div class="stats-grid">
@@ -166,6 +176,7 @@ $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_p
         ?>
     </div>
 </div>
+<?php endif; ?>
 
 <div style="height: 50px;"></div>
 
@@ -230,7 +241,7 @@ $perm_details = [
     </div>
     
     <!-- Disabled permissions (grayed out) -->
-    <div style="margin-top: 30px; padding: 20px; background: #f5f5f5; border-radius: 8px; opacity: 0.6;">
+    <div class="disabled-permissions-section" style="margin-top: 30px; padding: 20px; background: #f5f5f5; border-radius: 8px; opacity: 0.6;">
         <p style="color: #999; font-size: 13px; margin-bottom: 15px; font-style: italic;">Verfügbare Berechtigungen (nicht aktiviert):</p>
         <div class="dashboard-grid">
             <?php foreach ($perms as $perm): 

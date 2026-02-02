@@ -209,6 +209,9 @@ $has_dashboard_access = is_admin() || has_permission('dashboard.php');
         max-width: 1000px;
         margin: 0 auto;
         padding: 20px;
+        min-height: calc(100vh - 100px);
+        width: 100%;
+        display: block;
     }
     
     .profile-header {
@@ -220,10 +223,94 @@ $has_dashboard_access = is_admin() || has_permission('dashboard.php');
         border-bottom: 2px solid var(--primary-color);
     }
     
+    .profile-header h1 {
+        margin: 0;
+        flex: 1;
+    }
+    
     .profile-actions {
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+    
+    .privacy-section-mobile {
+        background: #f0f7ff;
+        border: 1px solid #0066cc;
+        padding: 15px;
+        border-radius: 4px;
+        margin: 20px 0;
+        text-align: center;
+    }
+    
+    .privacy-section-mobile p {
+        margin: 0 0 10px 0;
+        color: #333;
+    }
+    
+    .privacy-section-mobile .btn {
+        margin-top: 10px;
+    }
+    
+    @media (max-width: 768px) {
+        .profile-container {
+            padding: 10px;
+            min-height: calc(100vh - 150px);
+        }
+        
+        .profile-header {
+            flex-direction: column;
+            gap: 15px;
+            align-items: flex-start;
+            margin-bottom: 20px;
+        }
+        
+        .profile-header h1 {
+            width: 100%;
+        }
+        
+        .profile-actions {
+            width: 100%;
+            justify-content: stretch;
+            flex-direction: column;
+        }
+        
+        .profile-actions .btn {
+            width: 100%;
+            margin: 5px 0;
+        }
+        
+        .profile-section {
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .section-title {
+            font-size: 1.1rem;
+        }
+        
+        .info-grid {
+            grid-template-columns: 1fr;
+            gap: 15px;
+        }
+        
+        .info-item {
+            padding: 12px;
+        }
+        
+        .obligations-table {
+            font-size: 0.85rem;
+        }
+        
+        .obligations-table th,
+        .obligations-table td {
+            padding: 8px 4px;
+        }
+        
+        .edit-form {
+            padding: 15px;
+        }
     }
     
     .profile-section {
@@ -437,6 +524,19 @@ $has_dashboard_access = is_admin() || has_permission('dashboard.php');
         </div>
     <?php endif; ?>
     
+    <!-- Welcome message for users with no permissions -->
+    <?php if (!$has_dashboard_access): ?>
+        <div class="profile-section" style="background: #e3f2fd; border-left: 4px solid var(--secondary-color);">
+            <p style="margin: 0; color: #1976d2; font-size: 0.95rem;">
+                <i class="fas fa-info-circle"></i> Willkommen, <?php echo htmlspecialchars($_SESSION['first_name']); ?>! 
+                Sie sind erfolgreich angemeldet. 
+                <?php if (!$member): ?>
+                    Sie sind derzeit nicht als Mitglied verknüpft.
+                <?php endif; ?>
+            </p>
+        </div>
+    <?php endif; ?>
+    
     <!-- Personal Data Section -->
     <div class="profile-section">
         <div class="section-title">👤 Persönliche Daten</div>
@@ -613,7 +713,26 @@ $has_dashboard_access = is_admin() || has_permission('dashboard.php');
     <div class="profile-section">
         <div class="section-title">🔐 Datenschutz & Einstellungen</div>
         
-        <h3 style="margin-top: 0;">Datenschutzerklärung</h3>
+        <!-- Mobile-optimized privacy notice -->
+        <div class="privacy-section-mobile">
+            <p><strong>📋 Wichtig: Datenschutzerklärung</strong></p>
+            <p style="font-size: 0.9rem;">
+                <?php if ($privacy_acceptance): ?>
+                    <?php if ($privacy_acceptance['accepted']): ?>
+                        Version <?php echo htmlspecialchars($privacy_acceptance['version']); ?> akzeptiert am <?php echo date('d.m.Y', strtotime($privacy_acceptance['consent_date'])); ?>
+                    <?php else: ?>
+                        Version <?php echo htmlspecialchars($privacy_acceptance['version']); ?> abgelehnt am <?php echo date('d.m.Y', strtotime($privacy_acceptance['consent_date'])); ?>
+                    <?php endif; ?>
+                <?php else: ?>
+                    Einverständnis noch erforderlich
+                <?php endif; ?>
+            </p>
+            <a href="privacy_policy.php?redirect=profile.php" class="btn btn-primary">
+                📄 Datenschutzerklärung anzeigen
+            </a>
+        </div>
+        
+        <h3 style="margin-top: 20px;">Datenschutzerklärung</h3>
         <?php if ($privacy_acceptance): ?>
             <div class="consent-status <?php echo $privacy_acceptance['accepted'] ? 'accepted' : 'rejected'; ?>">
                 <?php if ($privacy_acceptance['accepted']): ?>

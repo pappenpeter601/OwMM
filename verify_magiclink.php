@@ -4,6 +4,12 @@
  * Validates the token and automatically logs in the user
  */
 
+// Force cache refresh for this script
+header("Cache-Control: no-store, no-cache, must-revalidate, max-age=0");
+header("Cache-Control: post-check=0, pre-check=0", false);
+header("Pragma: no-cache");
+header("Expires: 0");
+
 require_once 'config/config.php';
 require_once 'config/database.php';
 require_once 'includes/functions.php';
@@ -100,23 +106,31 @@ if (empty($token)) {
             }
         }
         
-        // Check if user is a supporter to redirect to profile instead of dashboard
-        $stmt = $pdo->prepare("SELECT member_id FROM users WHERE id = ?");
-        $stmt->execute([$magic_link['user_id']]);
-        $user = $stmt->fetch();
-        
-        if ($user && $user['member_id'] && !$_SESSION['is_admin']) {
-            $stmt = $pdo->prepare("SELECT member_type FROM members WHERE id = ?");
-            $stmt->execute([$user['member_id']]);
-            $member = $stmt->fetch();
-            if ($member && $member['member_type'] === 'supporter') {
-                // Supporters go to profile first
+        // Check if user has dashboard access - directly query the database
+        if (!$magic_link['is_admin']) {
+            $stmt = $pdo->prepare("
+                SELECT COUNT(*) as count 
+                FROM user_permissions up
+                JOIN permissions p ON up.permission_id = p.id
+                WHERE up.user_id = ? AND p.name = 'dashboard.php'
+            ");
+            $stmt->execute([$magic_link['user_id']]);
+            $result = $stmt->fetch();
+            $has_dashboard = isset($result['count']) ? $result['count'] > 0 : false;
+            
+            // Debug: log the check
+            error_log("Dashboard permission check - User ID: " . $magic_link['user_id'] . ", Has dashboard: " . ($has_dashboard ? 'YES' : 'NO'));
+            
+            if (!$has_dashboard) {
+                // Users without dashboard access go to profile
+                error_log("Redirecting user " . $magic_link['user_id'] . " to profile (no dashboard permission)");
                 header('Location: admin/profile.php');
                 exit;
             }
         }
         
         // Redirect to dashboard
+        error_log("Redirecting user to dashboard");
         header('Location: admin/dashboard.php');
         exit;
         
