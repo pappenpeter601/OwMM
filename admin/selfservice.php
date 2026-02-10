@@ -130,7 +130,12 @@ include 'includes/header.php';
     border-radius: 8px;
     padding: 20px;
     margin-bottom: 20px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    border: 1px solid #e6e6e6;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+}
+
+.credential-card + .credential-card {
+    margin-top: 24px;
 }
 
 .credential-header {
@@ -155,6 +160,14 @@ include 'includes/header.php';
 
 .credential-field {
     margin-bottom: 15px;
+    padding-bottom: 12px;
+    border-bottom: 1px dashed #e3e3e3;
+}
+
+.credential-field:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
 }
 
 .credential-label {
@@ -179,6 +192,7 @@ include 'includes/header.php';
     border-radius: 4px;
     font-family: monospace;
     word-break: break-all;
+    min-width: 0;
 }
 
 .credential-value.masked {
@@ -255,6 +269,77 @@ include 'includes/header.php';
     font-size: 4rem;
     margin-bottom: 20px;
 }
+
+@media (max-width: 768px) {
+    .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+    }
+
+    .page-actions,
+    .page-actions .btn {
+        width: 100%;
+    }
+
+    .search-box {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .search-box input,
+    .search-box .btn {
+        width: 100%;
+    }
+
+    .credential-card {
+        padding: 16px;
+    }
+
+    .credential-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .credential-actions {
+        width: 100%;
+        flex-direction: column;
+    }
+
+    .credential-actions .btn {
+        width: 100%;
+    }
+
+    .credential-value-wrapper {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .credential-value-wrapper .btn {
+        width: 100%;
+    }
+
+    .modal-content {
+        width: 100%;
+        max-width: 100%;
+        height: 100%;
+        max-height: 100vh;
+        border-radius: 0;
+        margin: 0;
+        padding: 20px;
+    }
+}
+
+@media (max-width: 480px) {
+    .credential-name {
+        font-size: 1.15rem;
+    }
+
+    .credential-value {
+        font-size: 0.95rem;
+    }
+}
 </style>
 
 <div class="page-header">
@@ -320,10 +405,6 @@ include 'includes/header.php';
                     <div class="credential-label">Beschreibung</div>
                     <div class="credential-value-wrapper">
                         <div class="credential-value"><?php echo nl2br(htmlspecialchars($cred['description'])); ?></div>
-                        <button onclick="copyToClipboard('<?php echo htmlspecialchars(trim($cred['description']), ENT_QUOTES); ?>', this)" 
-                                class="btn btn-secondary btn-sm btn-copy">
-                            <i class="fas fa-copy"></i> Kopieren
-                        </button>
                     </div>
                 </div>
                 <?php endif; ?>
