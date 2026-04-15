@@ -182,10 +182,37 @@ if (!empty($transactions)) {
     }
 }
 
-// Prefetch documents and linked open obligations for all transactions in this period
+// Prefetch linked documents and obligations for efficient checking
 $transactionIds = array_column($transactions, 'id');
 $documentsByTransaction = [];
 $obligationsByTransaction = [];
+$linkSummaryByTransaction = [];
+$transactionMeta = [];
+
+foreach ($transactions as $tx) {
+    $txId = (int) $tx['id'];
+    $documentsByTransaction[$txId] = [];
+    $obligationsByTransaction[$txId] = [];
+    $linkSummaryByTransaction[$txId] = [
+        'doc_count' => 0,
+        'obligation_count' => 0,
+        'linked_total' => 0.0
+    ];
+    $transactionMeta[$txId] = [
+        'id' => $txId,
+        'booking_date' => $tx['booking_date'],
+        'booking_text' => $tx['booking_text'] ?? '',
+        'purpose' => $tx['purpose'] ?? '',
+        'payer' => $tx['payer'] ?? '',
+        'amount' => (float) $tx['amount'],
+        'category_name' => $tx['category_name'] ?? '',
+        'category_color' => $tx['category_color'] ?? '',
+        'check_status' => $tx['check_status'] ?? 'unchecked',
+        'checker_name' => trim(($tx['checker_first'] ?? '') . ' ' . ($tx['checker_last'] ?? '')),
+        'check_date' => $tx['check_date'] ?? '',
+        'remarks' => $tx['remarks'] ?? ''
+    ];
+}
 
 if (!empty($transactionIds)) {
     $placeholders = implode(',', array_fill(0, count($transactionIds), '?'));
@@ -197,22 +224,50 @@ if (!empty($transactionIds)) {
                           ORDER BY uploaded_at DESC");
     $stmt->execute($transactionIds);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $doc) {
-        $documentsByTransaction[$doc['transaction_id']][] = $doc;
+        $txId = (int) $doc['transaction_id'];
+        $documentsByTransaction[$txId][] = $doc;
+        $linkSummaryByTransaction[$txId]['doc_count']++;
     }
 
-    // Linked obligations (only open/partial) per transaction
+    // Linked member fee obligations per transaction
     $stmt = $db->prepare("SELECT p.transaction_id, p.amount, p.payment_date,
                                  o.id as obligation_id, o.fee_year, o.status,
-                                 m.id as member_id, m.first_name, m.last_name, m.member_number
+                                 m.id as member_id, m.first_name, m.last_name, m.member_number,
+                                 'fee' as obligation_type,
+                                 CONCAT('Mitgliedsbeitrag ', o.fee_year) as description
                           FROM member_payments p
                           JOIN member_fee_obligations o ON p.obligation_id = o.id
                           JOIN members m ON o.member_id = m.id
                           WHERE p.transaction_id IN ($placeholders)
-                            AND o.status IN ('open', 'partial')
                           ORDER BY p.payment_date DESC");
     $stmt->execute($transactionIds);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $obl) {
-        $obligationsByTransaction[$obl['transaction_id']][] = $obl;
+        $txId = (int) $obl['transaction_id'];
+        $obligationsByTransaction[$txId][] = $obl;
+        $linkSummaryByTransaction[$txId]['obligation_count']++;
+        $linkSummaryByTransaction[$txId]['linked_total'] += (float) $obl['amount'];
+    }
+
+    // Linked item obligations per transaction
+    $stmt = $db->prepare("SELECT p.transaction_id, p.amount, p.payment_date,
+                                 o.id as obligation_id, NULL as fee_year, o.status,
+                                 COALESCE(m.id, 0) as member_id,
+                                 COALESCE(m.first_name, '') as first_name,
+                                 COALESCE(m.last_name, o.receiver_name) as last_name,
+                                 COALESCE(m.member_number, '') as member_number,
+                                 'item' as obligation_type,
+                                 CONCAT('Artikel-Forderung #', o.id) as description
+                          FROM item_obligation_payments p
+                          JOIN item_obligations o ON p.obligation_id = o.id
+                          LEFT JOIN members m ON o.member_id = m.id
+                          WHERE p.transaction_id IN ($placeholders)
+                          ORDER BY p.payment_date DESC");
+    $stmt->execute($transactionIds);
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $obl) {
+        $txId = (int) $obl['transaction_id'];
+        $obligationsByTransaction[$txId][] = $obl;
+        $linkSummaryByTransaction[$txId]['obligation_count']++;
+        $linkSummaryByTransaction[$txId]['linked_total'] += (float) $obl['amount'];
     }
 }
 
@@ -312,13 +367,13 @@ include 'includes/header.php';
     <div class="card-body">
         <div class="table-toolbar">
             <div class="legend">
-                <span class="legend-item"><span class="legend-dot legend-doc"></span> Belege öffnen (PDF/JPG/PNG)</span>
-                <span class="legend-item"><span class="legend-dot legend-obl"></span> Verknüpfte offene Forderungen</span>
+                <span class="legend-item"><span class="legend-dot legend-doc"></span> Ausgaben mit Belegen/Bildern</span>
+                <span class="legend-item"><span class="legend-dot legend-obl"></span> Einnahmen mit verknüpften Forderungen</span>
                 <span class="legend-item"><span class="legend-dot legend-ok"></span> ✓ Geprüft</span>
                 <span class="legend-item"><span class="legend-dot legend-warn"></span> ⚠️ In Prüfung</span>
                 <span class="legend-item"><span class="legend-dot legend-pending"></span> ⏳ Ungeprüft</span>
             </div>
-            <div class="hint">Tipp: Klicken Sie auf eine Transaktion, um sie auszuwählen und Belege/Forderungen anzuzeigen.</div>
+            <div class="hint">Klicken Sie eine Zeile an, prüfen Sie rechts alle Verknüpfungen und markieren Sie die Buchung direkt als korrekt oder zur Nachprüfung.</div>
         </div>
 
         <?php if (empty($transactions)): ?>
@@ -326,66 +381,68 @@ include 'includes/header.php';
         <?php else: ?>
             <div class="transactions-layout">
                 <div class="table-responsive table-side">
-                    <table class="table transactions-table">
+                    <table class="data-table transactions-table">
                         <thead>
                             <tr>
                                 <th>Datum</th>
                                 <th>Buchungstext</th>
                                 <th>Betrag</th>
-                                <th>Belege</th>
-                                <th>Forderungen</th>
+                                <th>Verknüpfungen</th>
                                 <th>Status</th>
                                 <th>Geprüft von</th>
-                                <?php if ($is_checker && !$is_finalized): ?>
-                                <th>Aktionen</th>
-                                <?php endif; ?>
                             </tr>
                         </thead>
                         <tbody>
                             <?php foreach ($transactions as $t): ?>
-                                <?php $row_selected = ($t['id'] == $selected_transaction_id); ?>
-                                <tr class="transaction-row status-<?php echo $t['check_status']; ?> amount-<?php echo $t['amount'] >= 0 ? 'positive' : 'negative'; ?> <?php echo $row_selected ? 'is-selected' : ''; ?>"
+                                <?php
+                                $row_selected = ($t['id'] == $selected_transaction_id);
+                                $summary = $linkSummaryByTransaction[$t['id']] ?? ['doc_count' => 0, 'obligation_count' => 0, 'linked_total' => 0];
+                                $is_income = $t['amount'] >= 0;
+                                ?>
+                                <tr class="transaction-row status-<?php echo $t['check_status']; ?> amount-<?php echo $is_income ? 'positive' : 'negative'; ?> <?php echo $row_selected ? 'is-selected' : ''; ?>"
                                     data-tx-id="<?php echo $t['id']; ?>">
                                     <td><?php echo date('d.m.Y', strtotime($t['booking_date'])); ?></td>
                                     <td>
                                         <strong><?php echo htmlspecialchars($t['booking_text'] ?? ''); ?></strong>
                                         <?php if ($t['purpose']): ?>
-                                            <br><small><?php echo htmlspecialchars(substr($t['purpose'], 0, 80)); ?></small>
+                                            <br><small><?php echo htmlspecialchars(substr($t['purpose'], 0, 110)); ?></small>
                                         <?php endif; ?>
-                                        <br><small class="text-muted">
-                                            <?php if ($t['payer']): ?>
-                                                Von: <?php echo htmlspecialchars($t['payer']); ?>
-                                            <?php endif; ?>
-                                        </small>
+                                        <?php if ($t['payer']): ?>
+                                            <br><small class="text-muted">Von: <?php echo htmlspecialchars($t['payer']); ?></small>
+                                        <?php endif; ?>
                                         <?php if ($t['category_name']): ?>
                                             <br><span class="category-badge-inline" style="background-color: <?php echo htmlspecialchars($t['category_color']); ?>">
                                                 <?php echo htmlspecialchars($t['category_name']); ?>
                                             </span>
                                         <?php endif; ?>
                                     </td>
-                                    <td class="amount <?php echo $t['amount'] >= 0 ? 'positive' : 'negative'; ?>">
+                                    <td class="amount <?php echo $is_income ? 'positive' : 'negative'; ?>">
                                         <?php echo number_format($t['amount'], 2, ',', '.'); ?> €
                                     </td>
-                                    <td>
-                                        <?php $docs = $documentsByTransaction[$t['id']] ?? []; ?>
-                                        <?php if (!empty($docs)): ?>
-                                            <?php $docCount = count($docs); ?>
-                                            <button class="link-btn" onclick="selectTransaction(<?php echo $t['id']; ?>); return false;">
-                                                <i class="fas fa-file-pdf"></i> <?php echo $docCount; ?> Beleg<?php echo $docCount > 1 ? 'e' : ''; ?>
-                                            </button>
+                                    <td class="linked-info-cell">
+                                        <button class="link-btn <?php echo $is_income ? 'obligation-btn' : 'doc-btn'; ?>" onclick="selectTransaction(<?php echo $t['id']; ?>); return false;">
+                                            <i class="fas <?php echo $is_income ? 'fa-link' : 'fa-file-alt'; ?>"></i>
+                                            <?php if ($is_income): ?>
+                                                <?php echo $summary['obligation_count']; ?> Forderung<?php echo $summary['obligation_count'] === 1 ? '' : 'en'; ?>
+                                            <?php else: ?>
+                                                <?php echo $summary['doc_count']; ?> Beleg<?php echo $summary['doc_count'] === 1 ? '' : 'e'; ?>
+                                            <?php endif; ?>
+                                        </button>
+                                        <?php if ($is_income): ?>
+                                            <div class="link-meta">Verknüpft: <?php echo number_format($summary['linked_total'], 2, ',', '.'); ?> €</div>
+                                            <?php if ($summary['obligation_count'] === 0): ?>
+                                                <div class="link-warning">Noch keine Forderung verknüpft</div>
+                                            <?php endif; ?>
+                                            <?php if ($summary['doc_count'] > 0): ?>
+                                                <div class="link-secondary"><?php echo $summary['doc_count']; ?> Beleg<?php echo $summary['doc_count'] === 1 ? '' : 'e'; ?> zusätzlich vorhanden</div>
+                                            <?php endif; ?>
                                         <?php else: ?>
-                                            <span class="text-muted">-</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <?php $obls = $obligationsByTransaction[$t['id']] ?? []; ?>
-                                        <?php if (!empty($obls)): ?>
-                                            <?php $oblCount = count($obls); ?>
-                                            <button class="link-btn" onclick="toggleObligationRow(<?php echo $t['id']; ?>); return false;">
-                                                <i class="fas fa-link"></i> <?php echo $oblCount; ?> Forderung<?php echo $oblCount > 1 ? 'en' : ''; ?>
-                                            </button>
-                                        <?php else: ?>
-                                            <span class="text-muted">-</span>
+                                            <div class="link-meta"><?php echo $summary['doc_count'] > 0 ? 'Dokumente zur Prüfung vorhanden' : 'Kein Beleg verknüpft'; ?></div>
+                                            <?php if ($summary['obligation_count'] > 0): ?>
+                                                <div class="link-secondary"><?php echo $summary['obligation_count']; ?> Forderung<?php echo $summary['obligation_count'] === 1 ? '' : 'en'; ?> zusätzlich verknüpft</div>
+                                            <?php elseif ($summary['doc_count'] === 0): ?>
+                                                <div class="link-warning">Bitte Beleg oder Bild prüfen</div>
+                                            <?php endif; ?>
                                         <?php endif; ?>
                                     </td>
                                     <td>
@@ -408,44 +465,6 @@ include 'includes/header.php';
                                             <br><small class="remarks">💬 <?php echo htmlspecialchars($t['remarks']); ?></small>
                                         <?php endif; ?>
                                     </td>
-                                    <?php if ($is_checker && !$is_finalized): ?>
-                                    <td class="row-actions">
-                                        <button class="btn btn-sm btn-success" onclick="approveTransaction(<?php echo $t['id']; ?>)">
-                                            <i class="fas fa-check"></i> OK
-                                        </button>
-                                        <button class="btn btn-sm btn-warning" onclick="investigateTransaction(<?php echo $t['id']; ?>)">
-                                            <i class="fas fa-exclamation"></i> Prüfen
-                                        </button>
-                                    </td>
-                                    <?php endif; ?>
-                                </tr>
-                                <tr class="obligation-detail" data-for="<?php echo $t['id']; ?>" style="<?php echo $row_selected ? '' : 'display:none;'; ?>">
-                                    <td colspan="<?php echo $is_checker && !$is_finalized ? '8' : '7'; ?>">
-                                        <?php $obls = $obligationsByTransaction[$t['id']] ?? []; ?>
-                                        <?php if (!empty($obls)): ?>
-                                            <div class="obligation-block">
-                                                <h4><i class="fas fa-link"></i> Verknüpfte Forderungen</h4>
-                                                <ul class="obligation-links">
-                                                    <?php foreach ($obls as $obl): ?>
-                                                        <?php $statusColor = $obl['status'] === 'partial' ? '#ff9800' : '#f44336'; ?>
-                                                        <li>
-                                                            <a href="member_payments.php?id=<?php echo intval($obl['member_id']); ?>" target="_blank">
-                                                                <?php echo htmlspecialchars($obl['first_name'] . ' ' . $obl['last_name']); ?>
-                                                                <span class="text-muted">(<?php echo htmlspecialchars($obl['member_number']); ?>)</span>
-                                                            </a>
-                                                            <small>
-                                                                Jahr: <?php echo htmlspecialchars($obl['fee_year']); ?> | 
-                                                                Betrag: <?php echo number_format($obl['amount'], 2, ',', '.'); ?> € | 
-                                                                Status: <span class="status-pill" style="background: <?php echo $statusColor; ?>;"><?php echo ucfirst($obl['status']); ?></span>
-                                                            </small>
-                                                        </li>
-                                                    <?php endforeach; ?>
-                                                </ul>
-                                            </div>
-                                        <?php else: ?>
-                                            <div class="obligation-block empty">Keine verknüpften Forderungen.</div>
-                                        <?php endif; ?>
-                                    </td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
@@ -453,7 +472,7 @@ include 'includes/header.php';
                 </div>
                 <div class="preview-side">
                     <div class="card preview-card">
-                        <div class="card-header"><h3>Beleg-Vorschau</h3></div>
+                        <div class="card-header"><h3>Prüfansicht</h3></div>
                         <div class="card-body" id="preview-panel">
                             <p class="text-muted" id="preview-placeholder">Wählen Sie eine Transaktion, um Belege anzuzeigen.</p>
                         </div>
@@ -512,24 +531,38 @@ include 'includes/header.php';
 </div>
 
 <script>
-const docsData = <?php echo json_encode($documentsByTransaction); ?>;
+const docsData = <?php echo json_encode($documentsByTransaction, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+const obligationsData = <?php echo json_encode($obligationsByTransaction, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+const txMetaData = <?php echo json_encode($transactionMeta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
 const selectedInit = <?php echo $selected_transaction_id ? intval($selected_transaction_id) : 'null'; ?>;
+const canCheck = <?php echo ($is_checker && !$is_finalized) ? 'true' : 'false'; ?>;
+let currentSelectedId = selectedInit;
 
 function approveTransaction(id) {
-    // Clear previous remarks and ensure clean state
-    document.getElementById('approve_remarks').value = '';
+    const form = document.getElementById('approveForm');
+    if (!form) return;
+    form.reset();
+    form.dataset.submitted = 'false';
     document.getElementById('approve_transaction_id').value = id;
-    document.getElementById('approveForm').reset();
-    document.getElementById('approveForm').dataset.submitted = 'false';
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-check"></i> Als geprüft markieren';
+    }
     document.getElementById('approveModal').style.display = 'flex';
 }
 
 function investigateTransaction(id) {
-    // Clear previous remarks and ensure clean state
-    document.getElementById('investigate_remarks').value = '';
+    const form = document.getElementById('investigateForm');
+    if (!form) return;
+    form.reset();
+    form.dataset.submitted = 'false';
     document.getElementById('investigate_transaction_id').value = id;
-    document.getElementById('investigateForm').reset();
-    document.getElementById('investigateForm').dataset.submitted = 'false';
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-exclamation"></i> Zur Prüfung markieren';
+    }
     document.getElementById('investigateModal').style.display = 'flex';
 }
 
@@ -538,120 +571,267 @@ function closeModals() {
     document.getElementById('investigateModal').style.display = 'none';
 }
 
-// Close modal on outside click
 window.onclick = function(event) {
     if (event.target.classList.contains('modal')) {
         closeModals();
     }
+};
+
+function safeColor(color) {
+    return /^#[0-9a-fA-F]{3,8}$/.test(color || '') ? color : '#607d8b';
+}
+
+function escapeHtml(str) {
+    return String(str || '').replace(/[&<>"']/g, function(m) {
+        return ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[m]);
+    });
+}
+
+function formatCurrency(value) {
+    return Number(value || 0).toLocaleString('de-DE', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    }) + ' €';
+}
+
+function formatDate(value) {
+    if (!value) return '—';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return escapeHtml(value);
+    return d.toLocaleDateString('de-DE');
 }
 
 function selectTransaction(id) {
-    const rows = document.querySelectorAll('.transaction-row');
-    const obligationRows = document.querySelectorAll('.obligation-detail');
-    rows.forEach(r => r.classList.remove('is-selected'));
-    obligationRows.forEach(r => r.style.display = 'none');
+    currentSelectedId = String(id);
+    document.querySelectorAll('.transaction-row').forEach(r => r.classList.remove('is-selected'));
 
     const row = document.querySelector(`.transaction-row[data-tx-id="${id}"]`);
-    const oblRow = document.querySelector(`.obligation-detail[data-for="${id}"]`);
+    const tableSide = document.querySelector('.table-side');
     if (row) {
         row.classList.add('is-selected');
-        // Scroll the row into view, centered
-        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (tableSide) {
+            const targetTop = row.offsetTop - (tableSide.clientHeight / 2) + (row.offsetHeight / 2);
+            tableSide.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+        }
     }
-    if (oblRow) {
-        oblRow.style.display = '';
-    }
+
     renderPreview(id);
 }
 
-function toggleObligationRow(id) {
-    const row = document.querySelector(`.obligation-detail[data-for="${id}"]`);
-    if (row) {
-        const isHidden = row.style.display === 'none';
-        row.style.display = isHidden ? '' : 'none';
+function selectAdjacent(step) {
+    const rows = Array.from(document.querySelectorAll('.transaction-row'));
+    if (!rows.length) return;
+    const ids = rows.map(row => String(row.dataset.txId));
+    let index = ids.indexOf(String(currentSelectedId));
+    if (index === -1) index = 0;
+    index = Math.max(0, Math.min(ids.length - 1, index + step));
+    selectTransaction(ids[index]);
+}
+
+function selectNextPending() {
+    const rows = Array.from(document.querySelectorAll('.transaction-row'));
+    if (!rows.length) return;
+
+    const ids = rows.map(row => String(row.dataset.txId));
+    let start = ids.indexOf(String(currentSelectedId));
+    if (start === -1) start = -1;
+
+    for (let offset = 1; offset <= rows.length; offset++) {
+        const row = rows[(start + offset) % rows.length];
+        if (row && !row.classList.contains('status-checked')) {
+            selectTransaction(row.dataset.txId);
+            return;
+        }
     }
 }
 
 function renderPreview(id) {
     const panel = document.getElementById('preview-panel');
     if (!panel) return;
+
+    const tx = txMetaData[id];
     const docs = docsData[id] || [];
-    if (!docs.length) {
-        panel.innerHTML = '<p class="text-muted">Keine Belege für diese Transaktion.</p>';
+    const obligations = obligationsData[id] || [];
+
+    if (!tx) {
+        panel.innerHTML = '<p class="text-muted">Transaktion nicht gefunden.</p>';
         return;
     }
 
-    const listItems = docs.map((doc, idx) => {
-        const safeName = escapeHtml(doc.file_name || 'Beleg');
-        return `<li><button class="link-btn" onclick="showDoc(${id}, ${idx}); return false;">${safeName}</button></li>`;
-    }).join('');
+    const statusMap = {
+        checked: { label: '✓ Geprüft', className: 'status-checked' },
+        under_investigation: { label: '⚠️ In Prüfung', className: 'status-investigation' },
+        unchecked: { label: '⏳ Ungeprüft', className: 'status-unchecked' }
+    };
+    const status = statusMap[tx.check_status] || statusMap.unchecked;
 
-    panel.innerHTML = `
-        <div class="preview-list">
-            <h4>Belege</h4>
-            <ul>${listItems}</ul>
+    const checkerInfo = tx.checker_name
+        ? `${escapeHtml(tx.checker_name)}${tx.check_date ? ' · ' + formatDate(tx.check_date) : ''}`
+        : 'Noch nicht geprüft';
+
+    const navHtml = `
+        <div class="quick-nav">
+            <button type="button" class="btn btn-sm btn-secondary" onclick="selectAdjacent(-1); return false;">
+                <i class="fas fa-arrow-up"></i> Vorherige
+            </button>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="selectAdjacent(1); return false;">
+                <i class="fas fa-arrow-down"></i> Nächste
+            </button>
+            <button type="button" class="btn btn-sm btn-info" onclick="selectNextPending(); return false;">
+                <i class="fas fa-forward"></i> Nächste offene
+            </button>
         </div>
-        <div class="preview-frame" id="preview-frame"></div>
     `;
 
-    showDoc(id, 0);
+    const actionHtml = canCheck ? `
+        <div class="quick-check-actions">
+            <button type="button" class="btn btn-success" onclick="approveTransaction(${id})">
+                <i class="fas fa-check"></i> Als korrekt markieren
+            </button>
+            <button type="button" class="btn btn-warning" onclick="investigateTransaction(${id})">
+                <i class="fas fa-search"></i> Zur Nachprüfung
+            </button>
+        </div>
+    ` : '';
+
+    const obligationHtml = obligations.length
+        ? obligations.map(obl => {
+            const targetUrl = obl.obligation_type === 'item'
+                ? `view_item_obligation.php?id=${encodeURIComponent(obl.obligation_id)}`
+                : `member_payments.php?id=${encodeURIComponent(obl.member_id)}`;
+            const typeLabel = obl.obligation_type === 'item' ? 'ARTIKEL' : 'BEITRAG';
+            const statusClass = obl.status === 'paid'
+                ? 'pill-success'
+                : (obl.status === 'partial' ? 'pill-warning' : 'pill-danger');
+            const yearInfo = obl.fee_year ? `Jahr ${escapeHtml(obl.fee_year)} · ` : '';
+            const memberInfo = obl.member_number ? ` (${escapeHtml(obl.member_number)})` : '';
+
+            return `
+                <a href="${targetUrl}" target="_blank" class="obligation-card">
+                    <div class="obligation-card-title">
+                        <span class="type-tag">${typeLabel}</span>
+                        ${escapeHtml((obl.first_name || '') + ' ' + (obl.last_name || ''))}${memberInfo}
+                    </div>
+                    <div class="obligation-card-meta">
+                        ${yearInfo}${escapeHtml(obl.description || '')}
+                    </div>
+                    <div class="obligation-card-meta">
+                        Betrag: ${formatCurrency(obl.amount)} ·
+                        <span class="status-pill ${statusClass}">${escapeHtml(obl.status || 'offen')}</span>
+                    </div>
+                </a>
+            `;
+        }).join('')
+        : '<div class="empty-state">Keine verknüpften Forderungen vorhanden.</div>';
+
+    const docButtonsHtml = docs.length
+        ? docs.map((doc, idx) => {
+            const size = doc.file_size ? ` · ${(Number(doc.file_size) / 1024).toFixed(1).replace('.', ',')} KB` : '';
+            return `
+                <button type="button" class="doc-picker ${idx === 0 ? 'is-active' : ''}" onclick="showDoc(${id}, ${idx}); return false;">
+                    <i class="fas fa-file-alt"></i>
+                    ${escapeHtml(doc.file_name || 'Beleg')}${size}
+                </button>
+            `;
+        }).join('')
+        : '<div class="empty-state">Keine verknüpften Belege oder Bilder vorhanden.</div>';
+
+    const categoryHtml = tx.category_name
+        ? `<span class="category-badge-inline" style="background-color: ${safeColor(tx.category_color)}">${escapeHtml(tx.category_name)}</span>`
+        : '<span class="text-muted">Keine Kategorie</span>';
+
+    panel.innerHTML = `
+        <div class="selected-summary">
+            <div class="selected-summary-header">
+                <div>
+                    <div class="selected-date">${formatDate(tx.booking_date)}</div>
+                    <div class="selected-title">${escapeHtml(tx.booking_text || 'Transaktion')}</div>
+                </div>
+                <div class="selected-amount ${Number(tx.amount) >= 0 ? 'positive' : 'negative'}">${formatCurrency(tx.amount)}</div>
+            </div>
+            <div class="selected-summary-grid">
+                <div>
+                    <strong>Zahler/Empfänger</strong><br>
+                    ${escapeHtml(tx.payer || '—')}
+                </div>
+                <div>
+                    <strong>Status</strong><br>
+                    <span class="status-badge ${status.className}">${status.label}</span>
+                </div>
+                <div class="full-row">
+                    <strong>Verwendungszweck</strong><br>
+                    ${escapeHtml(tx.purpose || '—')}
+                </div>
+                <div>
+                    <strong>Kategorie</strong><br>
+                    ${categoryHtml}
+                </div>
+                <div>
+                    <strong>Prüfung</strong><br>
+                    ${checkerInfo}
+                </div>
+                ${tx.remarks ? `<div class="full-row"><strong>Bemerkung</strong><br>${escapeHtml(tx.remarks)}</div>` : ''}
+            </div>
+        </div>
+        ${navHtml}
+        ${actionHtml}
+        <div class="preview-section">
+            <h4><i class="fas fa-link"></i> Verknüpfte Forderungen</h4>
+            <div class="obligation-preview-list">${obligationHtml}</div>
+        </div>
+        <div class="preview-section">
+            <h4><i class="fas fa-file-alt"></i> Belege / Bilder</h4>
+            <div class="preview-doc-buttons">${docButtonsHtml}</div>
+            ${docs.length ? '<div class="preview-frame" id="preview-frame"></div>' : ''}
+        </div>
+    `;
+
+    if (docs.length) {
+        showDoc(id, 0);
+    }
 }
 
 function showDoc(id, idx) {
     const panel = document.getElementById('preview-frame');
     if (!panel) return;
+
     const docs = docsData[id] || [];
     const doc = docs[idx];
     if (!doc) {
         panel.innerHTML = '<div class="error-message"><p>Beleg nicht gefunden.</p></div>';
         return;
     }
-    // Build correct path - file_path already includes subdirectory like 'documents/filename.pdf'
-    let filePath = doc.file_path;
-    // Remove leading slash if present
+
+    document.querySelectorAll('#preview-panel .doc-picker').forEach((btn, buttonIdx) => {
+        btn.classList.toggle('is-active', buttonIdx === idx);
+    });
+
+    let filePath = doc.file_path || '';
     if (filePath.startsWith('/')) {
         filePath = filePath.substring(1);
     }
     const path = '../uploads/' + filePath;
-    const ext = (doc.file_path || '').split('.').pop().toLowerCase();
-    
-    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
-        panel.innerHTML = `<img src="${path}" alt="${escapeHtml(doc.file_name)}" class="preview-image" 
-            onerror="this.parentElement.innerHTML='<div class=\\"error-message\\"><i class=\\"fas fa-exclamation-triangle\\"></i><p><strong>Bild nicht gefunden</strong></p><p>Datei: ${escapeHtml(doc.file_name)}</p><p>Pfad: <code>${escapeHtml(path)}</code></p><p class=\\"hint\\">Die Datei wurde möglicherweise noch nicht hochgeladen.</p></div>';">`;
-    } else {
-        // For PDFs, check if file exists first, then display
-        panel.innerHTML = `<div class="loading-message"><i class="fas fa-spinner fa-spin"></i> Lade PDF...</div>`;
-        
-        fetch(path, { method: 'HEAD' })
-            .then(response => {
-                if (response.ok) {
-                    panel.innerHTML = `<iframe src="${path}" class="preview-object"></iframe>`;
-                } else {
-                    panel.innerHTML = `<div class="error-message">
-                        <i class="fas fa-exclamation-triangle"></i>
-                        <p><strong>PDF nicht gefunden (${response.status})</strong></p>
-                        <p>Datei: ${escapeHtml(doc.file_name)}</p>
-                        <p>Pfad: <code>${escapeHtml(path)}</code></p>
-                        <p class="hint">Die Datei wurde möglicherweise noch nicht hochgeladen. Bitte laden Sie die Belege in der Transaktionsverwaltung hoch.</p>
-                    </div>`;
-                }
-            })
-            .catch(err => {
-                panel.innerHTML = `<div class="error-message">
-                    <i class="fas fa-exclamation-triangle"></i>
-                    <p><strong>Fehler beim Laden des PDFs</strong></p>
-                    <p>Datei: ${escapeHtml(doc.file_name)}</p>
-                    <p>Pfad: <code>${escapeHtml(path)}</code></p>
-                    <p class="hint">Die Datei wurde möglicherweise noch nicht hochgeladen.</p>
-                </div>`;
-            });
-    }
-}
+    const ext = filePath.split('.').pop().toLowerCase();
 
-function escapeHtml(str) {
-    return String(str || '').replace(/[&<>"']/g, function(m) {
-        return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]);
-    });
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
+        panel.innerHTML = `<img src="${path}" alt="${escapeHtml(doc.file_name)}" class="preview-image"
+            onerror="this.parentElement.innerHTML='<div class=\\"error-message\\"><i class=\\"fas fa-exclamation-triangle\\"></i><p><strong>Bild nicht gefunden</strong></p><p>Datei: ${escapeHtml(doc.file_name)}</p><p>Pfad: <span>${escapeHtml(path)}</span></p></div>';
+        ">`;
+        return;
+    }
+
+    panel.innerHTML = '<div class="loading-message"><i class="fas fa-spinner fa-spin"></i> Lade Beleg...</div>';
+    fetch(path, { method: 'HEAD' })
+        .then(response => {
+            if (response.ok) {
+                panel.innerHTML = `<iframe src="${path}" class="preview-object"></iframe>`;
+            } else {
+                panel.innerHTML = `<div class="error-message"><i class="fas fa-exclamation-triangle"></i><p><strong>Beleg nicht gefunden (${response.status})</strong></p><p>Datei: ${escapeHtml(doc.file_name)}</p><p>Pfad: <span>${escapeHtml(path)}</span></p></div>`;
+            }
+        })
+        .catch(() => {
+            panel.innerHTML = `<div class="error-message"><i class="fas fa-exclamation-triangle"></i><p><strong>Fehler beim Laden des Belegs</strong></p><p>Datei: ${escapeHtml(doc.file_name)}</p><p>Pfad: <span>${escapeHtml(path)}</span></p></div>`;
+        });
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -660,7 +840,6 @@ document.addEventListener('DOMContentLoaded', function() {
         selectTransaction(initial);
     }
 
-    // Prevent double form submission
     const approveForm = document.getElementById('approveForm');
     if (approveForm) {
         approveForm.addEventListener('submit', function(e) {
@@ -669,7 +848,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 return false;
             }
             this.dataset.submitted = 'true';
-            // Disable submit button to prevent multiple clicks
             const submitBtn = this.querySelector('button[type="submit"]');
             if (submitBtn) {
                 submitBtn.disabled = true;
@@ -686,7 +864,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 return false;
             }
             this.dataset.submitted = 'true';
-            // Disable submit button to prevent multiple clicks
             const submitBtn = this.querySelector('button[type="submit"]');
             if (submitBtn) {
                 submitBtn.disabled = true;
@@ -695,12 +872,12 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Make whole row clickable for selection (except action buttons)
     document.querySelectorAll('.transaction-row').forEach(row => {
         row.addEventListener('click', function(e) {
-            if (e.target.closest('.row-actions') || e.target.closest('button')) return;
-            const id = this.dataset.txId;
-            selectTransaction(id);
+            if (e.target.closest('button') || e.target.closest('a')) {
+                return;
+            }
+            selectTransaction(this.dataset.txId);
         });
     });
 });
@@ -747,8 +924,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
 .transactions-layout {
     display: grid;
-    grid-template-columns: 2fr 1fr;
-    gap: 16px;
+    grid-template-columns: minmax(0, 1.8fr) minmax(340px, 1fr);
+    gap: 18px;
     align-items: start;
 }
 
@@ -756,9 +933,24 @@ document.addEventListener('DOMContentLoaded', function() {
     .transactions-layout {
         grid-template-columns: 1fr;
     }
+
+    .table-side {
+        max-height: none;
+    }
+
+    .preview-side {
+        position: static;
+        top: auto;
+        transform: none;
+    }
 }
 
-.table-side { overflow-x: auto; }
+.table-side {
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: calc(100vh - 40px);
+    scroll-behavior: smooth;
+}
 
 .transactions-table {
     width: 100%;
@@ -925,6 +1117,30 @@ document.addEventListener('DOMContentLoaded', function() {
     font-weight: 600;
 }
 
+.pill-success { background: #4caf50; }
+.pill-warning { background: #ff9800; }
+.pill-danger { background: #f44336; }
+
+.badge-primary {
+    background: #1976d2;
+    color: #fff;
+}
+
+.alert-info {
+    background-color: #e8f4fd;
+    color: #0b4f7d;
+    border-left: 4px solid #1976d2;
+}
+
+.btn-warning {
+    background-color: #ff9800;
+    color: #fff;
+}
+
+.btn-warning:hover {
+    background-color: #f57c00;
+}
+
 .table-toolbar {
     display: flex;
     flex-direction: column;
@@ -965,6 +1181,10 @@ document.addEventListener('DOMContentLoaded', function() {
     font-size: 0.85rem;
 }
 
+.linked-info-cell {
+    min-width: 190px;
+}
+
 .link-btn {
     background: #2196f3;
     border: none;
@@ -974,56 +1194,60 @@ document.addEventListener('DOMContentLoaded', function() {
     cursor: pointer;
     font-size: 0.9rem;
     font-weight: 500;
-    transition: background 0.2s;
+    transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
     text-shadow: 0 1px 1px rgba(0,0,0,0.1);
 }
 
-.link-btn:hover { 
+.link-btn:hover {
     background: #1976d2;
     transform: translateY(-1px);
     box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     color: #ffffff !important;
 }
 
+.obligation-btn {
+    background: #7b1fa2;
+}
+
+.obligation-btn:hover {
+    background: #6a1b9a;
+}
+
 .link-btn i {
     margin-right: 4px;
 }
 
-.row-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+.link-meta,
+.link-secondary,
+.link-warning {
+    margin-top: 0.35rem;
+    font-size: 0.82rem;
 }
 
-.obligation-detail {
-    background: #fafafa;
-    border-top: 2px solid #e0e0e0 !important;
+.link-meta,
+.link-secondary {
+    color: #555;
 }
 
-.obligation-block {
-    padding: 15px;
-    background: #fff;
-    border-radius: 4px;
-    margin: 5px;
+.link-warning {
+    color: #b26a00;
+    font-weight: 600;
 }
 
-.obligation-block h4 {
-    margin: 0 0 10px 0;
-    font-size: 0.95rem;
-    color: #333;
-}
 
-.obligation-block.empty {
-    color: #999;
-    font-style: italic;
+.preview-side {
+    min-width: 0;
+    position: sticky;
+    top: 50%;
+    transform: translateY(-50%);
+    align-self: start;
 }
 
 .preview-card {
-    position: sticky;
-    top: 0;
-    max-height: 100vh;
+    max-height: calc(100vh - 32px);
     overflow-y: auto;
     z-index: 10;
+    margin: 0;
 }
 
 .preview-card .card-header {
@@ -1031,27 +1255,140 @@ document.addEventListener('DOMContentLoaded', function() {
     border-bottom: 2px solid #ddd;
 }
 
-.preview-list {
-    margin-bottom: 15px;
-    padding: 10px;
-    background: #f9f9f9;
-    border-radius: 4px;
+.selected-summary {
+    background: #f8fafc;
+    border: 1px solid #e0e7ef;
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 12px;
 }
 
-.preview-list h4 {
-    margin: 0 0 8px 0;
-    font-size: 0.9rem;
+.selected-summary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.selected-date {
+    color: #64748b;
+    font-size: 0.82rem;
+    margin-bottom: 0.2rem;
+}
+
+.selected-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.selected-amount {
+    font-size: 1.1rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.selected-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+    font-size: 0.92rem;
+}
+
+.selected-summary-grid .full-row {
+    grid-column: 1 / -1;
+}
+
+.quick-nav,
+.quick-check-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.quick-nav .btn,
+.quick-check-actions .btn {
+    flex: 1;
+    min-width: 120px;
+}
+
+.preview-section {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.preview-section h4 {
+    margin: 0 0 10px 0;
+    font-size: 0.98rem;
+    color: #1f2937;
+}
+
+.obligation-preview-list {
+    display: grid;
+    gap: 8px;
+}
+
+.obligation-card {
+    display: block;
+    text-decoration: none;
+    background: #fff;
+    border: 1px solid #e0e7ef;
+    border-left: 4px solid #9c27b0;
+    border-radius: 6px;
+    padding: 10px 12px;
+    color: #0f172a !important;
+}
+
+.obligation-card:hover {
+    background: #f8fbff;
+}
+
+.obligation-card-title {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.obligation-card-meta {
+    font-size: 0.85rem;
     color: #555;
 }
 
-.preview-list ul {
-    margin: 0;
-    padding-left: 0;
-    list-style: none;
+.type-tag {
+    display: inline-block;
+    margin-right: 0.45rem;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: #e3f2fd;
+    color: #1565c0;
+    font-size: 0.72rem;
+    font-weight: 700;
 }
 
-.preview-list li {
-    margin-bottom: 4px;
+.preview-doc-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.doc-picker {
+    width: 100%;
+    text-align: left;
+    border: 1px solid #d0d7e2;
+    background: #fff;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    color: #0f172a;
+}
+
+.doc-picker:hover,
+.doc-picker.is-active {
+    border-color: #1976d2;
+    background: #eff6ff;
 }
 
 .preview-frame {
@@ -1062,6 +1399,14 @@ document.addEventListener('DOMContentLoaded', function() {
     border-radius: 8px;
     padding: 0;
     overflow: hidden;
+}
+
+.empty-state {
+    padding: 12px;
+    border-radius: 6px;
+    background: #f9fafb;
+    color: #666;
+}
 
 .error-message {
     padding: 30px;
@@ -1085,20 +1430,8 @@ document.addEventListener('DOMContentLoaded', function() {
     font-size: 1.1em;
 }
 
-.error-message code {
-    background: #f5f5f5;
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-size: 0.9em;
-    color: #333;
+.error-message span {
     word-break: break-all;
-}
-
-.error-message .hint {
-    font-size: 0.9em;
-    color: #666;
-    font-style: italic;
-    margin-top: 15px;
 }
 
 .loading-message {
@@ -1111,7 +1444,6 @@ document.addEventListener('DOMContentLoaded', function() {
 .loading-message i {
     font-size: 2em;
     margin-bottom: 10px;
-}
 }
 
 .preview-object {
@@ -1157,6 +1489,18 @@ document.addEventListener('DOMContentLoaded', function() {
     gap: 10px;
     justify-content: flex-end;
     margin-top: 20px;
+}
+
+@media (max-width: 768px) {
+    .selected-summary-header,
+    .selected-summary-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .selected-summary-header {
+        flex-direction: column;
+    }
+
 }
 </style>
 

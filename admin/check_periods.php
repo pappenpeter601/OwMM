@@ -265,7 +265,7 @@ include 'includes/header.php';
             <p class="text-muted">Keine Prüfperioden vorhanden.</p>
         <?php else: ?>
             <div class="table-responsive">
-                <table class="table">
+                <table class="data-table check-periods-table">
                     <thead>
                         <tr>
                             <th>Status</th>
@@ -278,6 +278,12 @@ include 'includes/header.php';
                     </thead>
                     <tbody>
                         <?php foreach ($periods as $period): ?>
+                            <?php
+                            $completed_transactions = $period['checked_transactions'] + $period['investigation_transactions'];
+                            $progress_percent = $period['total_transactions'] > 0
+                                ? min(100, round(($completed_transactions / $period['total_transactions']) * 100))
+                                : 100;
+                            ?>
                             <tr>
                                 <td>
                                     <?php if ($period['status'] === 'finalized'): ?>
@@ -287,56 +293,69 @@ include 'includes/header.php';
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <strong><?php echo htmlspecialchars($period['period_name']); ?></strong><br>
-                                    <small class="text-muted">Jahr: <?php echo $period['business_year']; ?></small>
+                                    <div class="period-name"><?php echo htmlspecialchars($period['period_name']); ?></div>
+                                    <div class="period-meta">Geschäftsjahr <?php echo $period['business_year']; ?></div>
+                                </td>
+                                <td class="period-range">
+                                    <strong><?php echo date('d.m.Y', strtotime($period['date_from'])); ?></strong><br>
+                                    <span class="text-muted">bis <?php echo date('d.m.Y', strtotime($period['date_to'])); ?></span>
                                 </td>
                                 <td>
-                                    <?php echo date('d.m.Y', strtotime($period['date_from'])); ?><br>
-                                    bis <?php echo date('d.m.Y', strtotime($period['date_to'])); ?>
-                                </td>
-                                <td>
-                                    👑 <?php echo htmlspecialchars($period['leader_first'] . ' ' . $period['leader_last']); ?><br>
-                                    🆕 <?php echo htmlspecialchars($period['assistant_first'] . ' ' . $period['assistant_last']); ?>
-                                </td>
-                                <td>
-                                    <div class="progress-info">
-                                        <strong><?php echo $period['checked_transactions']; ?></strong> / 
-                                        <?php echo $period['total_transactions']; ?> geprüft
-                                        <?php if ($period['investigation_transactions'] > 0): ?>
-                                            <br><small class="text-warning">⚠️ <?php echo $period['investigation_transactions']; ?> in Prüfung</small>
-                                        <?php endif; ?>
+                                    <div class="reviewer-entry">
+                                        <span class="reviewer-role">Leitung</span>
+                                        <span><?php echo htmlspecialchars($period['leader_first'] . ' ' . $period['leader_last']); ?></span>
+                                    </div>
+                                    <div class="reviewer-entry">
+                                        <span class="reviewer-role">Assistenz</span>
+                                        <span><?php echo htmlspecialchars($period['assistant_first'] . ' ' . $period['assistant_last']); ?></span>
                                     </div>
                                 </td>
-                                <td>
-                                    <?php if ($period['status'] === 'in_progress'): ?>
-                                        <a href="transaction_checking.php?period_id=<?php echo $period['id']; ?>" class="btn btn-sm btn-primary">
-                                            <i class="fas fa-check"></i> Prüfen
-                                        </a>
-                                        <?php if (($user_member_id == $period['leader_id']) || has_role('admin')): ?>
-                                            <?php if ($period['total_transactions'] == $period['checked_transactions'] + $period['investigation_transactions']): ?>
-                                                <form method="POST" style="display: inline;" 
-                                                      onsubmit="return confirm('Möchten Sie diese Prüfperiode wirklich finalisieren? Dies kann nicht rückgängig gemacht werden!');">
-                                                    <input type="hidden" name="action" value="finalize">
-                                                    <input type="hidden" name="period_id" value="<?php echo $period['id']; ?>">
-                                                    <button type="submit" class="btn btn-sm btn-success">
-                                                        <i class="fas fa-lock"></i> Finalisieren
-                                                    </button>
-                                                </form>
+                                <td class="period-progress-cell">
+                                    <div class="progress-info">
+                                        <strong><?php echo $completed_transactions; ?></strong> / <?php echo $period['total_transactions']; ?> geprüft
+                                        <span class="progress-percent"><?php echo $progress_percent; ?>%</span>
+                                    </div>
+                                    <div class="progress-bar" aria-hidden="true">
+                                        <div class="progress-bar-fill <?php echo $period['investigation_transactions'] > 0 ? 'warning' : ''; ?>" style="width: <?php echo $progress_percent; ?>%;"></div>
+                                    </div>
+                                    <?php if ($period['investigation_transactions'] > 0): ?>
+                                        <small class="progress-note warning">⚠️ <?php echo $period['investigation_transactions']; ?> Buchung(en) in Prüfung</small>
+                                    <?php elseif ($period['total_transactions'] == 0): ?>
+                                        <small class="progress-note">Noch keine Buchungen im Zeitraum</small>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="period-actions">
+                                    <div class="actions">
+                                        <?php if ($period['status'] === 'in_progress'): ?>
+                                            <a href="transaction_checking.php?period_id=<?php echo $period['id']; ?>" class="btn btn-sm btn-primary">
+                                                <i class="fas fa-check"></i> Prüfen
+                                            </a>
+                                            <?php if (($user_member_id == $period['leader_id']) || has_role('admin')): ?>
+                                                <?php if ($period['total_transactions'] == $period['checked_transactions'] + $period['investigation_transactions']): ?>
+                                                    <form method="POST" class="inline-action-form"
+                                                          onsubmit="return confirm('Möchten Sie diese Prüfperiode wirklich finalisieren? Dies kann nicht rückgängig gemacht werden!');">
+                                                        <input type="hidden" name="action" value="finalize">
+                                                        <input type="hidden" name="period_id" value="<?php echo $period['id']; ?>">
+                                                        <button type="submit" class="btn btn-sm btn-success">
+                                                            <i class="fas fa-lock"></i> Finalisieren
+                                                        </button>
+                                                    </form>
+                                                <?php endif; ?>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            <a href="transaction_checking.php?period_id=<?php echo $period['id']; ?>" class="btn btn-sm btn-secondary">
+                                                <i class="fas fa-eye"></i> Ansehen
+                                            </a>
+                                            <?php if ($period['finalized_at']): ?>
+                                                <small class="period-meta">
+                                                    Finalisiert am <?php echo date('d.m.Y H:i', strtotime($period['finalized_at'])); ?>
+                                                    <?php if ($period['finalized_by_first']): ?>
+                                                        von <?php echo htmlspecialchars($period['finalized_by_first'] . ' ' . $period['finalized_by_last']); ?>
+                                                    <?php endif; ?>
+                                                </small>
                                             <?php endif; ?>
                                         <?php endif; ?>
-                                    <?php else: ?>
-                                        <a href="transaction_checking.php?period_id=<?php echo $period['id']; ?>" class="btn btn-sm btn-secondary">
-                                            <i class="fas fa-eye"></i> Ansehen
-                                        </a>
-                                        <?php if ($period['finalized_at']): ?>
-                                            <br><small class="text-muted">
-                                                Finalisiert am <?php echo date('d.m.Y H:i', strtotime($period['finalized_at'])); ?>
-                                                <?php if ($period['finalized_by_first']): ?>
-                                                    von <?php echo htmlspecialchars($period['finalized_by_first'] . ' ' . $period['finalized_by_last']); ?>
-                                                <?php endif; ?>
-                                            </small>
-                                        <?php endif; ?>
-                                    <?php endif; ?>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -349,36 +368,124 @@ include 'includes/header.php';
 
 <style>
 .form-row {
-    display: flex;
-    gap: 15px;
-    margin: 0 -7.5px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
 }
 
 .form-row .form-group {
-    flex: 1;
-    padding: 0 7.5px;
+    min-width: 0;
 }
 
-.badge {
+.check-periods-table td {
+    vertical-align: top;
+}
+
+.period-name {
+    font-weight: 600;
+    margin-bottom: 0.2rem;
+}
+
+.period-meta {
+    display: block;
+    color: #666;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.period-range {
+    min-width: 135px;
+}
+
+.reviewer-entry {
+    margin-bottom: 0.6rem;
+}
+
+.reviewer-entry:last-child {
+    margin-bottom: 0;
+}
+
+.reviewer-role {
     display: inline-block;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 0.85em;
-    font-weight: bold;
+    margin-bottom: 0.15rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #666;
 }
 
-.badge-success {
-    background-color: #4caf50;
-    color: white;
-}
-
-.badge-warning {
-    background-color: #ff9800;
-    color: white;
+.period-progress-cell {
+    min-width: 220px;
 }
 
 .progress-info {
-    font-size: 0.9em;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-size: 0.9rem;
+    margin-bottom: 0.4rem;
+}
+
+.progress-percent {
+    font-weight: 700;
+    color: #555;
+    white-space: nowrap;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #e9ecef;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4caf50, #66bb6a);
+    border-radius: 999px;
+}
+
+.progress-bar-fill.warning {
+    background: linear-gradient(90deg, #ff9800, #ffb74d);
+}
+
+.progress-note {
+    display: block;
+    margin-top: 0.45rem;
+    color: #666;
+}
+
+.progress-note.warning {
+    color: #b26a00;
+}
+
+.period-actions .actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+.inline-action-form {
+    margin: 0;
+}
+
+@media (max-width: 768px) {
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+
+    .progress-info {
+        flex-direction: column;
+        gap: 0.2rem;
+    }
+
+    .period-actions .btn,
+    .period-actions .inline-action-form {
+        width: 100%;
+    }
 }
 </style>
 
