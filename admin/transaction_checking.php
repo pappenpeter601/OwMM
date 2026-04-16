@@ -12,6 +12,7 @@ if (!is_logged_in() || (!is_admin() && !has_permission('check_periods.php'))) {
 
 $page_title = 'Transaktionen prüfen';
 $db = getDBConnection();
+ensure_expense_request_support();
 
 // Get period_id from URL
 $period_id = isset($_GET['period_id']) ? intval($_GET['period_id']) : 0;
@@ -229,6 +230,20 @@ if (!empty($transactionIds)) {
         $linkSummaryByTransaction[$txId]['doc_count']++;
     }
 
+    // Expense request documents linked via reimbursement obligations
+    $stmt = $db->prepare("SELECT DISTINCT p.transaction_id, erd.file_name, erd.file_path, erd.file_size, erd.uploaded_at
+                          FROM item_obligation_payments p
+                          JOIN expense_requests er ON er.linked_item_obligation_id = p.obligation_id
+                          JOIN expense_request_documents erd ON erd.expense_request_id = er.id
+                          WHERE p.transaction_id IN ($placeholders)
+                          ORDER BY erd.uploaded_at DESC");
+    $stmt->execute($transactionIds);
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $doc) {
+        $txId = (int) $doc['transaction_id'];
+        $documentsByTransaction[$txId][] = $doc;
+        $linkSummaryByTransaction[$txId]['doc_count']++;
+    }
+
     // Linked member fee obligations per transaction
     $stmt = $db->prepare("SELECT p.transaction_id, p.amount, p.payment_date,
                                  o.id as obligation_id, o.fee_year, o.status,
@@ -248,18 +263,21 @@ if (!empty($transactionIds)) {
         $linkSummaryByTransaction[$txId]['linked_total'] += (float) $obl['amount'];
     }
 
-    // Linked item obligations per transaction
+    // Linked item obligations and reimbursement requests per transaction
     $stmt = $db->prepare("SELECT p.transaction_id, p.amount, p.payment_date,
                                  o.id as obligation_id, NULL as fee_year, o.status,
                                  COALESCE(m.id, 0) as member_id,
                                  COALESCE(m.first_name, '') as first_name,
                                  COALESCE(m.last_name, o.receiver_name) as last_name,
                                  COALESCE(m.member_number, '') as member_number,
-                                 'item' as obligation_type,
-                                 CONCAT('Artikel-Forderung #', o.id) as description
+                                 CASE WHEN er.id IS NOT NULL THEN 'expense' ELSE 'item' END as obligation_type,
+                                 CASE WHEN er.id IS NOT NULL THEN CONCAT('Erstattungsantrag ', er.transfer_reference) ELSE CONCAT('Artikel-Forderung #', o.id) END as description,
+                                 COALESCE(er.transfer_reference, '') as reference_code,
+                                 COALESCE(er.expense_context, '') as expense_context
                           FROM item_obligation_payments p
                           JOIN item_obligations o ON p.obligation_id = o.id
                           LEFT JOIN members m ON o.member_id = m.id
+                          LEFT JOIN expense_requests er ON er.linked_item_obligation_id = o.id
                           WHERE p.transaction_id IN ($placeholders)
                           ORDER BY p.payment_date DESC");
     $stmt->execute($transactionIds);
@@ -696,15 +714,20 @@ function renderPreview(id) {
 
     const obligationHtml = obligations.length
         ? obligations.map(obl => {
-            const targetUrl = obl.obligation_type === 'item'
+            const isItemLike = obl.obligation_type === 'item' || obl.obligation_type === 'expense';
+            const targetUrl = isItemLike
                 ? `view_item_obligation.php?id=${encodeURIComponent(obl.obligation_id)}`
                 : `member_payments.php?id=${encodeURIComponent(obl.member_id)}`;
-            const typeLabel = obl.obligation_type === 'item' ? 'ARTIKEL' : 'BEITRAG';
+            const typeLabel = obl.obligation_type === 'expense'
+                ? 'ERSTATTUNG'
+                : (obl.obligation_type === 'item' ? 'ARTIKEL' : 'BEITRAG');
             const statusClass = obl.status === 'paid'
                 ? 'pill-success'
                 : (obl.status === 'partial' ? 'pill-warning' : 'pill-danger');
             const yearInfo = obl.fee_year ? `Jahr ${escapeHtml(obl.fee_year)} · ` : '';
             const memberInfo = obl.member_number ? ` (${escapeHtml(obl.member_number)})` : '';
+            const referenceInfo = obl.reference_code ? `<div class="obligation-card-meta"><strong>Referenz:</strong> ${escapeHtml(obl.reference_code)}</div>` : '';
+            const contextInfo = obl.expense_context ? `<div class="obligation-card-meta">${escapeHtml(obl.expense_context)}</div>` : '';
 
             return `
                 <a href="${targetUrl}" target="_blank" class="obligation-card">
@@ -715,6 +738,8 @@ function renderPreview(id) {
                     <div class="obligation-card-meta">
                         ${yearInfo}${escapeHtml(obl.description || '')}
                     </div>
+                    ${referenceInfo}
+                    ${contextInfo}
                     <div class="obligation-card-meta">
                         Betrag: ${formatCurrency(obl.amount)} ·
                         <span class="status-pill ${statusClass}">${escapeHtml(obl.status || 'offen')}</span>

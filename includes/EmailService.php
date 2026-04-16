@@ -212,6 +212,72 @@ class EmailService {
      * @param string $testEmail Email address to send test to
      * @return array Success/error response
      */
+    public function sendAdminExpenseRequestNotification($request) {
+        try {
+            if (!$this->smtpClient) {
+                throw new Exception("SMTP client not configured");
+            }
+
+            $subject = "Neuer Erstattungsantrag - OwMM Feuerwehr-System";
+            $htmlBody = EmailTemplates::generateAdminExpenseRequestNotificationEmail($request);
+
+            $this->smtpClient->send(
+                $this->config['from_email'],
+                $this->config['from_name'],
+                $this->config['from_email'],
+                $subject,
+                $htmlBody,
+                null,
+                null,
+                true
+            );
+
+            return ['success' => true, 'message' => 'Admin-Benachrichtigung zum Erstattungsantrag erfolgreich gesendet'];
+        } catch (Exception $e) {
+            error_log("Expense request notification email error: " . $e->getMessage());
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    public function sendExpenseRequestStatusNotification($request, $status) {
+        try {
+            if (!$this->smtpClient) {
+                throw new Exception("SMTP client not configured");
+            }
+
+            $recipient = trim((string) ($request['notification_email'] ?? ''));
+            if ($recipient === '') {
+                throw new Exception("Requester has no email address");
+            }
+
+            if ($status === 'paid') {
+                $subject = "Ihre Erstattung ist freigegeben - OwMM Feuerwehr-System";
+            } elseif ($status === 'approved') {
+                $subject = "Ihr Erstattungsantrag wurde genehmigt - OwMM Feuerwehr-System";
+            } else {
+                $subject = "Ihr Erstattungsantrag wurde bearbeitet - OwMM Feuerwehr-System";
+            }
+
+            $htmlBody = EmailTemplates::generateExpenseRequestStatusEmail($request, $status);
+
+            $this->smtpClient->send(
+                $this->config['from_email'],
+                $this->config['from_name'],
+                $recipient,
+                $subject,
+                $htmlBody,
+                null,
+                null,
+                true
+            );
+
+            return ['success' => true, 'message' => 'Status-Email zum Erstattungsantrag erfolgreich gesendet'];
+        } catch (Exception $e) {
+            error_log("Expense request status email error: " . $e->getMessage());
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
     public function sendTestEmail($testEmail) {
         try {
             if (!$this->smtpClient) {

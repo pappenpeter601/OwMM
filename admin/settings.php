@@ -421,7 +421,9 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'user_detail') {
 
     $user_id = isset($_GET['user_id']) ? (int)$_GET['user_id'] : 0;
     $stmt = $db->prepare("SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.is_admin, u.last_login, u.member_id,
-                                 m.first_name as member_first_name, m.last_name as member_last_name, m.member_number
+                                 m.first_name as member_first_name, m.last_name as member_last_name, m.member_number,
+                                 COALESCE(m.member_type, '') as member_type,
+                                 COALESCE(m.active, 0) as member_active
                           FROM users u 
                           LEFT JOIN members m ON u.member_id = m.id
                           WHERE u.id = ? AND u.active = 1");
@@ -1459,11 +1461,21 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Reload users with is_admin column (include email for display)
     $stmt = $db->query("SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.is_admin, u.last_login, u.member_id,
-                               m.first_name as member_first_name, m.last_name as member_last_name, m.member_number
+                               m.first_name as member_first_name, m.last_name as member_last_name, m.member_number,
+                               COALESCE(m.member_type, '') as member_type,
+                               COALESCE(m.active, 0) as member_active
                         FROM users u 
                         LEFT JOIN members m ON u.member_id = m.id
                         WHERE u.active = 1 
-                        ORDER BY u.username");
+                        ORDER BY CASE COALESCE(m.member_type, '')
+                                    WHEN 'active' THEN 0
+                                    WHEN 'supporter' THEN 1
+                                    WHEN 'pensioner' THEN 2
+                                    ELSE 3
+                                 END,
+                                 COALESCE(m.last_name, u.last_name),
+                                 COALESCE(m.first_name, u.first_name),
+                                 u.username");
     $all_users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // Determine selected user (from URL or default to first)
@@ -1491,13 +1503,44 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
             <ul class="user-list" id="userList">
                 <?php foreach ($all_users as $u): ?>
-                    <?php $is_active = ((int)$u['id'] === (int)$selected_user_id); ?>
-                    <li class="user-list-item <?php echo $is_active ? 'active' : ''; ?>" data-name="<?php echo htmlspecialchars(($u['first_name'] . ' ' . $u['last_name'] . ' ' . $u['username'])); ?>">
+                    <?php
+                    $is_active = ((int)$u['id'] === (int)$selected_user_id);
+                    $display_name = trim(($u['first_name'] ?? '') . ' ' . ($u['last_name'] ?? ''));
+                    if ($display_name === '') {
+                        $display_name = $u['username'];
+                    }
+                    $member_type = $u['member_type'] ?? '';
+                    $member_type_class = 'is-unlinked-member';
+                    $member_type_label = 'Ohne Zuordnung';
+                    $member_type_badge = '';
+
+                    if ($member_type === 'active') {
+                        $member_type_class = 'is-active-member';
+                        $member_type_label = 'Einsatzeinheit';
+                        $member_type_badge = 'member-type-active';
+                    } elseif ($member_type === 'supporter') {
+                        $member_type_class = 'is-supporter-member';
+                        $member_type_label = 'Förderer';
+                        $member_type_badge = 'member-type-supporter';
+                    } elseif ($member_type === 'pensioner') {
+                        $member_type_class = 'is-pensioner-member';
+                        $member_type_label = 'Altersabteilung';
+                        $member_type_badge = 'member-type-pensioner';
+                    }
+                    ?>
+                    <li class="user-list-item <?php echo $is_active ? 'active' : ''; ?> <?php echo $member_type_class; ?>" data-name="<?php echo htmlspecialchars($display_name . ' ' . $u['username'] . ' ' . $member_type_label); ?>">
                         <a href="settings.php?tab=users&user_id=<?php echo (int)$u['id']; ?>" class="user-list-link">
                             <span class="user-avatar" aria-hidden="true"><?php echo strtoupper(substr($u['first_name'] ?: $u['username'], 0, 1)); ?></span>
-                            <span class="user-primary"><?php echo htmlspecialchars($u['first_name'] . ' ' . $u['last_name']); ?></span>
-                            <span class="user-secondary">@<?php echo htmlspecialchars($u['username']); ?></span>
-                            <?php if ($u['is_admin']): ?><span class="user-badge">Admin</span><?php endif; ?>
+                            <span>
+                                <span class="user-primary"><?php echo htmlspecialchars($display_name); ?></span>
+                                <span class="user-secondary">@<?php echo htmlspecialchars($u['username']); ?><?php if (!empty($u['member_number'])): ?> • <?php echo htmlspecialchars($u['member_number']); ?><?php endif; ?></span>
+                            </span>
+                            <span class="user-tags">
+                                <?php if ($member_type_badge): ?>
+                                    <span class="member-type-badge <?php echo $member_type_badge; ?>"><?php echo htmlspecialchars($member_type_label); ?></span>
+                                <?php endif; ?>
+                                <?php if ($u['is_admin']): ?><span class="user-badge">Admin</span><?php endif; ?>
+                            </span>
                         </a>
                     </li>
                 <?php endforeach; ?>
@@ -1800,7 +1843,7 @@ document.addEventListener('DOMContentLoaded', () => {
 }
 
 .user-list-item {
-    margin: 0;
+    margin: 0 0 0.4rem 0;
 }
 
 .user-list-link {
@@ -1812,18 +1855,46 @@ document.addEventListener('DOMContentLoaded', () => {
     border-radius: 6px;
     color: inherit;
     text-decoration: none;
+    background: #fff;
+    border: 1px solid transparent;
+    border-left: 4px solid transparent;
+    transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.user-list-link:hover {
+    transform: translateY(-1px);
+}
+
+.user-list-item.is-active-member .user-list-link {
+    background: #f1f8e9;
+    border-left-color: #43a047;
+}
+
+.user-list-item.is-supporter-member .user-list-link {
+    background: #fff8e1;
+    border-left-color: #fb8c00;
+}
+
+.user-list-item.is-pensioner-member .user-list-link {
+    background: #f3e5f5;
+    border-left-color: #8e24aa;
+}
+
+.user-list-item.is-unlinked-member .user-list-link {
+    background: #fafafa;
+    border-left-color: #b0bec5;
 }
 
 .user-list-item.active .user-list-link {
-    background: #eef6ff;
-    border: 1px solid #d5e9ff;
+    border-color: #d5e9ff;
+    box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.12);
 }
 
 .user-avatar {
     width: 32px;
     height: 32px;
     border-radius: 50%;
-    background: #1976d2;
+    background: #607d8b;
     color: #fff;
     display: flex;
     align-items: center;
@@ -1831,8 +1902,64 @@ document.addEventListener('DOMContentLoaded', () => {
     font-weight: 600;
 }
 
-.user-primary { font-weight: 600; }
-.user-secondary { color: #777; font-size: 13px; margin-left: 6px; }
+.user-list-item.is-active-member .user-avatar {
+    background: #d32f2f;
+}
+
+.user-list-item.is-supporter-member .user-avatar {
+    background: #1976d2;
+}
+
+.user-list-item.is-pensioner-member .user-avatar {
+    background: #8e24aa;
+}
+
+.user-list-item.is-unlinked-member .user-avatar {
+    background: #78909c;
+}
+
+.user-primary {
+    display: block;
+    font-weight: 600;
+}
+
+.user-secondary {
+    display: block;
+    color: #777;
+    font-size: 13px;
+    margin-top: 2px;
+}
+
+.user-tags {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.35rem;
+}
+
+.member-type-badge {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.member-type-active {
+    background: #e8f5e9;
+    color: #2e7d32;
+}
+
+.member-type-supporter {
+    background: #fff3e0;
+    color: #ef6c00;
+}
+
+.member-type-pensioner {
+    background: #f3e5f5;
+    color: #7b1fa2;
+}
+
 .user-badge { background: #fce8e6; color: #c62828; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
 
 .user-detail-panel { min-height: 300px; }

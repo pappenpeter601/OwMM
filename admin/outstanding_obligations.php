@@ -14,13 +14,54 @@ if (!is_logged_in() || !has_permission('outstanding_obligations.php')) {
     exit;
 }
 
+ensure_expense_request_support();
+
 $year = $_GET['year'] ?? date('Y');
 $tab = $_GET['tab'] ?? 'fees'; // 'fees' or 'items'
 $search = $_GET['search'] ?? '';
-$status_filter = $_GET['status'] ?? ''; // 'open', 'partial', 'paid' for fees; 'open', 'partial', 'paid' for items
+$status_filter = $_GET['status'] ?? ''; // filter for fees/items and reimbursement review states
 $member_type_filter = $_GET['member_type'] ?? ''; // 'active', 'supporter', 'pensioner'
 $db = getDBConnection();
+$success = '';
 $error = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'review_expense_request') {
+    $requestId = (int) ($_POST['request_id'] ?? 0);
+    $newStatus = $_POST['new_status'] ?? '';
+    $notes = trim($_POST['accountant_notes'] ?? '');
+
+    $result = update_expense_request_status($requestId, $newStatus, $notes, $_SESSION['user_id'] ?? null);
+    if (!empty($result['success'])) {
+        $_SESSION['success'] = $result['message'] ?? 'Antrag aktualisiert.';
+    } else {
+        $_SESSION['error'] = $result['error'] ?? 'Fehler beim Aktualisieren des Antrags.';
+    }
+
+    $redirectParams = [
+        'year' => $year,
+        'tab' => 'items'
+    ];
+    if ($search !== '') {
+        $redirectParams['search'] = $search;
+    }
+    if ($status_filter !== '') {
+        $redirectParams['status'] = $status_filter;
+    }
+    if ($member_type_filter !== '') {
+        $redirectParams['member_type'] = $member_type_filter;
+    }
+
+    redirect('outstanding_obligations.php?' . http_build_query($redirectParams));
+}
+
+if (isset($_SESSION['success'])) {
+    $success = $_SESSION['success'];
+    unset($_SESSION['success']);
+}
+if (isset($_SESSION['error'])) {
+    $error = $_SESSION['error'];
+    unset($_SESSION['error']);
+}
 
 // Get fee obligations for the year
 $open_obligations = get_open_obligations($year);
@@ -72,11 +113,26 @@ try {
                                   COALESCE(m.member_number, '') as member_number,
                                   COALESCE(m.member_type, '') as member_type,
                                   COALESCE(om.first_name, '') as org_first_name,
-                                  COALESCE(om.last_name, '') as org_last_name
+                                  COALESCE(om.last_name, '') as org_last_name,
+                                  er.id AS expense_request_id,
+                                  er.status AS expense_request_status,
+                                  er.transfer_reference,
+                                  er.expense_context,
+                                  er.accountant_notes,
+                                  er.created_at AS expense_requested_at,
+                                  (SELECT COUNT(*) FROM expense_request_documents erd WHERE erd.expense_request_id = er.id) AS document_count
                           FROM item_obligations io
                           LEFT JOIN members m ON io.member_id = m.id
                           LEFT JOIN members om ON io.organizing_member_id = om.id
-                          ORDER BY ISNULL(io.due_date) ASC, io.due_date ASC, io.created_at DESC");
+                          LEFT JOIN expense_requests er ON er.linked_item_obligation_id = io.id
+                          ORDER BY CASE COALESCE(er.status, '')
+                                     WHEN 'submitted' THEN 0
+                                     WHEN 'approved' THEN 1
+                                     WHEN 'paid' THEN 2
+                                     WHEN 'rejected' THEN 3
+                                     ELSE 4
+                                   END,
+                                   ISNULL(io.due_date) ASC, io.due_date ASC, io.created_at DESC");
     $stmt->execute();
     $open_item_obligations = $stmt->fetchAll();
     
@@ -88,13 +144,18 @@ try {
                     ? $obl['member_first_name'] . ' ' . $obl['member_last_name']
                     : $obl['receiver_name'];
             return strpos(strtolower($name), $search_lower) !== false ||
-                   strpos(strtolower($obl['member_number']), $search_lower) !== false;
+                   strpos(strtolower($obl['member_number']), $search_lower) !== false ||
+                   strpos(strtolower($obl['transfer_reference'] ?? ''), $search_lower) !== false ||
+                   strpos(strtolower($obl['expense_context'] ?? ''), $search_lower) !== false;
         });
     }
     
     // Apply status filter to item obligations
     if (!empty($status_filter)) {
         $open_item_obligations = array_filter($open_item_obligations, function($obl) use ($status_filter) {
+            if (!empty($obl['expense_request_id']) && in_array($status_filter, ['submitted', 'approved', 'rejected', 'paid'], true)) {
+                return ($obl['expense_request_status'] ?? '') === $status_filter;
+            }
             return $obl['status'] === $status_filter;
         });
     }
@@ -121,6 +182,14 @@ try {
 
 include 'includes/header.php';
 ?>
+
+<?php if ($success): ?>
+    <div class="alert alert-success"><?php echo htmlspecialchars($success); ?></div>
+<?php endif; ?>
+
+<?php if ($error): ?>
+    <div class="alert alert-error"><?php echo htmlspecialchars($error); ?></div>
+<?php endif; ?>
 
 <div class="content-header">
     <div>
@@ -251,6 +320,10 @@ include 'includes/header.php';
                     <option value="open" <?= $status_filter === 'open' ? 'selected' : '' ?>>Offen</option>
                     <option value="partial" <?= $status_filter === 'partial' ? 'selected' : '' ?>>Teilzahlung</option>
                     <option value="paid" <?= $status_filter === 'paid' ? 'selected' : '' ?>>Bezahlt</option>
+                    <option value="submitted" <?= $status_filter === 'submitted' ? 'selected' : '' ?>>Eingereicht</option>
+                    <option value="approved" <?= $status_filter === 'approved' ? 'selected' : '' ?>>Genehmigt</option>
+                    <option value="rejected" <?= $status_filter === 'rejected' ? 'selected' : '' ?>>Abgelehnt</option>
+                    <option value="cancelled" <?= $status_filter === 'cancelled' ? 'selected' : '' ?>>Storniert</option>
                 </select>
             </div>
         </div>
@@ -283,7 +356,7 @@ if ($member_type_filter !== '') {
     $active_filters[] = 'Typ: ' . ($member_type_labels[$member_type_filter] ?? $member_type_filter);
 }
 if ($status_filter !== '') {
-    $status_labels = ['open' => 'Offen', 'partial' => 'Teilzahlung', 'paid' => 'Bezahlt'];
+    $status_labels = ['open' => 'Offen', 'partial' => 'Teilzahlung', 'paid' => 'Bezahlt', 'submitted' => 'Eingereicht', 'approved' => 'Genehmigt', 'rejected' => 'Abgelehnt', 'cancelled' => 'Storniert'];
     $active_filters[] = 'Status: ' . ($status_labels[$status_filter] ?? $status_filter);
 }
 if ($search !== '') {
@@ -305,14 +378,14 @@ if ($search !== '') {
     </a>
     <a href="?year=<?= $year ?>&tab=items&search=<?= urlencode($search) ?>&status=<?= urlencode($status_filter) ?>&member_type=<?= urlencode($member_type_filter) ?>" 
        class="tab-button" style="padding: 0.75rem 1.5rem; border-bottom: 3px solid transparent; text-decoration: none; font-weight: 600; color: #666; <?= $tab === 'items' ? 'border-bottom-color: #2196f3; color: #2196f3;' : '' ?>">
-        <i class="fas fa-boxes"></i> Artikel-Forderungen
+        <i class="fas fa-boxes"></i> Artikel & Erstattungen
     </a>
 </div>
 
 <!-- Outstanding Obligations Table -->
 <div class="card">
     <div class="card-header">
-        <h2><?= $tab === 'fees' ? 'Offene Mitgliedsbeiträge' : 'Offene Artikel-Forderungen' ?></h2>
+        <h2><?= $tab === 'fees' ? 'Offene Mitgliedsbeiträge' : 'Artikel-Forderungen & Erstattungsanträge' ?></h2>
     </div>
     <div class="card-body">
         <?php if ($tab === 'fees'): ?>
@@ -434,19 +507,28 @@ if ($search !== '') {
                             $is_overdue = $obl['due_date'] && strtotime($obl['due_date']) < time();
                             $outstanding = $obl['total_amount'] - $obl['paid_amount'];
                             $is_member = !empty($obl['member_id']);
+                            $is_expense_request = !empty($obl['expense_request_id']);
                             $receiver_display = $is_member 
-                                ? htmlspecialchars($obl['member_first_name'] . ' ' . $obl['member_last_name'])
+                                ? htmlspecialchars(trim($obl['member_first_name'] . ' ' . $obl['member_last_name']))
                                 : htmlspecialchars($obl['receiver_name']);
+                            $request_status = $obl['expense_request_status'] ?? '';
                             ?>
                             <tr class="<?= $is_overdue ? 'overdue-row' : '' ?>">
                                 <td>
                                     <strong><?= $receiver_display ?></strong>
-                                    <?php if (!$is_member && $obl['receiver_phone']): ?>
+                                    <?php if ($is_expense_request): ?>
+                                        <br><small style="color: #666;">Referenz: <?= htmlspecialchars($obl['transfer_reference']) ?></small>
+                                        <br><small style="color: #666;"><?= (int) ($obl['document_count'] ?? 0) ?> Beleg<?= ((int) ($obl['document_count'] ?? 0) === 1) ? '' : 'e' ?></small>
+                                    <?php elseif (!$is_member && $obl['receiver_phone']): ?>
                                         <br><small style="color: #666;"><?= htmlspecialchars($obl['receiver_phone']) ?></small>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <?php if ($is_member): ?>
+                                    <?php if ($is_expense_request): ?>
+                                        <span class="badge" style="background: #ede7f6; color: #5e35b1;">Erstattung</span>
+                                        <br>
+                                        <span class="badge <?= $is_member ? 'badge-primary' : 'badge-secondary' ?>" style="margin-top: 0.25rem;"><?= $is_member ? 'Mitglied' : 'Extern' ?></span>
+                                    <?php elseif ($is_member): ?>
                                         <span class="badge badge-primary">Mitglied</span>
                                     <?php else: ?>
                                         <span class="badge badge-secondary">Extern</span>
@@ -465,12 +547,26 @@ if ($search !== '') {
                                     <strong><?= number_format($outstanding, 2, ',', '.') ?> €</strong>
                                 </td>
                                 <td>
-                                    <?php if ($outstanding == 0): ?>
-                                        <span class="badge badge-success">Bezahlt</span>
-                                    <?php elseif ($obl['paid_amount'] > 0): ?>
-                                        <span class="badge badge-warning">Teilzahlung</span>
+                                    <?php if ($is_expense_request): ?>
+                                        <?php if ($request_status === 'paid'): ?>
+                                            <span class="badge badge-success">Ausgezahlt</span>
+                                        <?php elseif ($request_status === 'approved'): ?>
+                                            <span class="badge badge-primary">Genehmigt</span>
+                                        <?php elseif ($request_status === 'rejected'): ?>
+                                            <span class="badge badge-secondary">Abgelehnt</span>
+                                        <?php else: ?>
+                                            <span class="badge badge-warning">Eingereicht</span>
+                                        <?php endif; ?>
                                     <?php else: ?>
-                                        <span class="badge badge-danger">Offen</span>
+                                        <?php if ($obl['status'] === 'cancelled'): ?>
+                                            <span class="badge badge-secondary">Storniert</span>
+                                        <?php elseif ($outstanding == 0): ?>
+                                            <span class="badge badge-success">Bezahlt</span>
+                                        <?php elseif ($obl['paid_amount'] > 0): ?>
+                                            <span class="badge badge-warning">Teilzahlung</span>
+                                        <?php else: ?>
+                                            <span class="badge badge-danger">Offen</span>
+                                        <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -486,6 +582,22 @@ if ($search !== '') {
                                        class="btn btn-sm btn-secondary" title="Details anzeigen">
                                         <i class="fas fa-eye"></i>
                                     </a>
+                                    <?php if ($is_expense_request && in_array($request_status, ['submitted', 'approved'], true)): ?>
+                                        <form method="POST" style="display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.5rem; min-width: 180px;">
+                                            <input type="hidden" name="action" value="review_expense_request">
+                                            <input type="hidden" name="request_id" value="<?= (int) $obl['expense_request_id'] ?>">
+                                            <input type="text" name="accountant_notes" value="<?= htmlspecialchars($obl['accountant_notes'] ?? '') ?>" placeholder="Notiz optional" style="width: 100%; padding: 0.35rem 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                                            <div style="display: flex; flex-wrap: wrap; gap: 0.35rem;">
+                                                <?php if ($request_status === 'submitted'): ?>
+                                                    <button type="submit" name="new_status" value="approved" class="btn btn-sm btn-success">Genehmigen</button>
+                                                <?php endif; ?>
+                                                <?php if ($request_status === 'approved'): ?>
+                                                    <button type="submit" name="new_status" value="paid" class="btn btn-sm btn-primary">Ausgezahlt</button>
+                                                <?php endif; ?>
+                                                <button type="submit" name="new_status" value="rejected" class="btn btn-sm btn-danger">Ablehnen</button>
+                                            </div>
+                                        </form>
+                                    <?php endif; ?>
                                 </td>
                             </tr>
                         <?php endforeach; ?>

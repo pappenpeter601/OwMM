@@ -19,6 +19,7 @@ if (isset($_SESSION['show_privacy_policy_only'])) {
 }
 
 $page_title = 'Dashboard';
+ensure_expense_request_support();
 include 'includes/header.php';
 
 // Check if user is a supporter - if so, redirect to profile
@@ -34,7 +35,8 @@ $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_p
                       has_permission('board.php') || has_permission('messages.php') || 
                       has_permission('kassenpruefer_assignments.php') || has_permission('approve_registrations.php') || 
                       has_permission('settings.php') || has_permission('check_periods.php') || 
-                      has_permission('selfservice.php') || has_permission('calendar.php');
+                      has_permission('selfservice.php') || has_permission('calendar.php') ||
+                      has_permission('expense_requests.php');
 ?>
 
 <?php if (!$has_any_permission): ?>
@@ -203,6 +205,7 @@ $perm_details = [
     'items.php' => ['icon' => '📦', 'title' => 'Artikel', 'desc' => 'Artikel und Gegenstände verwalten', 'url' => 'items.php'],
     'outstanding_obligations.php' => ['icon' => '🔗', 'title' => 'Offene Forderungen', 'desc' => 'Mitgliedsbeiträge und Artikel-Verpflichtungen verwalten', 'url' => 'outstanding_obligations.php'],
     'payment_reminders.php' => ['icon' => '📧', 'title' => 'Zahlungserinnerungen', 'desc' => 'Zahlungserinnerungen versenden und Versand-Historie', 'url' => 'payment_reminders.php'],
+    'expense_requests.php' => ['icon' => '🧾', 'title' => 'Belege Einreichen', 'desc' => 'Auslagen mobil einreichen und Erstattungen verfolgen', 'url' => 'expense_requests.php'],
     'calendar.php' => ['icon' => '📆', 'title' => 'Kalender', 'desc' => 'Gemeinsamen Kalender verwalten', 'url' => 'calendar.php'],
     'check_periods.php' => ['icon' => '✅', 'title' => 'Prüfperioden', 'desc' => 'Kassenprüfung nach Perioden durchführen', 'url' => 'check_periods.php'],
 ];

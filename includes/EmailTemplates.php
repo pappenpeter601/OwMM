@@ -244,6 +244,91 @@ class EmailTemplates {
     /**
      * Generate test email
      */
+    public static function generateAdminExpenseRequestNotificationEmail($request) {
+        $baseUrl = self::getBaseUrl();
+        $pageLink = $baseUrl . '/admin/expense_requests.php';
+
+        $content = '
+            <h2 style="color: #dc2626; margin-top: 0;">Neuer Antrag: Belege Einreichen</h2>
+            
+            <p style="font-size: 16px; color: #333; line-height: 1.6;">
+                Es wurde ein neuer Erstattungsantrag eingereicht und eine offene Verbindlichkeit erzeugt.
+            </p>
+            
+            <div style="background-color: #f8f8f8; padding: 20px; border-radius: 5px; margin: 20px 0;">
+                <p style="margin: 5px 0;"><strong>Name:</strong> ' . htmlspecialchars($request['full_name'] ?? '', ENT_QUOTES, 'UTF-8') . '</p>
+                <p style="margin: 5px 0;"><strong>Betrag:</strong> ' . number_format((float) ($request['amount'] ?? 0), 2, ',', '.') . ' €</p>
+                <p style="margin: 5px 0;"><strong>Referenz:</strong> ' . htmlspecialchars($request['reference'] ?? '', ENT_QUOTES, 'UTF-8') . '</p>
+                <p style="margin: 5px 0;"><strong>IBAN:</strong> ' . htmlspecialchars($request['iban'] ?? '—', ENT_QUOTES, 'UTF-8') . '</p>
+                <p style="margin: 5px 0;"><strong>Kontext:</strong><br>' . nl2br(htmlspecialchars($request['context'] ?? '', ENT_QUOTES, 'UTF-8')) . '</p>
+            </div>
+            
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="' . htmlspecialchars($pageLink, ENT_QUOTES, 'UTF-8') . '" 
+                   style="display: inline-block; padding: 15px 40px; background-color: #dc2626; color: #ffffff; text-decoration: none; border-radius: 5px; font-size: 16px; font-weight: bold;">
+                    Antrag öffnen
+                </a>
+            </div>
+        ';
+
+        return self::getHtmlBase('Neuer Erstattungsantrag', $content);
+    }
+
+    public static function generateExpenseRequestStatusEmail($request, $status) {
+        $firstName = trim((string) ($request['member_first_name'] ?? ''));
+        if ($firstName === '') {
+            $nameParts = preg_split('/\s+/', trim((string) ($request['full_name_snapshot'] ?? '')));
+            $firstName = $nameParts[0] ?? 'Guten Tag';
+        }
+
+        $reference = htmlspecialchars((string) ($request['transfer_reference'] ?? ''), ENT_QUOTES, 'UTF-8');
+        $amount = number_format((float) ($request['requested_amount_total'] ?? 0), 2, ',', '.');
+        $notes = trim((string) ($request['accountant_notes'] ?? ''));
+        $notesHtml = $notes !== ''
+            ? '<p style="font-size: 14px; color: #555; line-height: 1.6;"><strong>Hinweis:</strong><br>' . nl2br(htmlspecialchars($notes, ENT_QUOTES, 'UTF-8')) . '</p>'
+            : '';
+
+        if ($status === 'paid') {
+            $title = 'Erstattung wird ausgezahlt';
+            $content = '
+                <h2 style="color: #10b981; margin-top: 0;">Gute Nachrichten, ' . htmlspecialchars($firstName, ENT_QUOTES, 'UTF-8') . '!</h2>
+                <p style="font-size: 16px; color: #333; line-height: 1.6;">
+                    Ihr Erstattungsantrag wurde freigegeben. Der Betrag wird in Kürze auf Ihr Konto überwiesen.
+                </p>
+                <div style="background-color: #f8f8f8; padding: 20px; border-radius: 5px; margin: 20px 0;">
+                    <p style="margin: 5px 0;"><strong>Referenz:</strong> ' . $reference . '</p>
+                    <p style="margin: 5px 0;"><strong>Betrag:</strong> ' . $amount . ' €</p>
+                </div>
+                ' . $notesHtml;
+        } elseif ($status === 'approved') {
+            $title = 'Erstattungsantrag genehmigt';
+            $content = '
+                <h2 style="color: #10b981; margin-top: 0;">Hallo ' . htmlspecialchars($firstName, ENT_QUOTES, 'UTF-8') . ',</h2>
+                <p style="font-size: 16px; color: #333; line-height: 1.6;">
+                    Ihr Erstattungsantrag wurde geprüft und genehmigt. Die Auszahlung wird nun vorbereitet.
+                </p>
+                <div style="background-color: #f8f8f8; padding: 20px; border-radius: 5px; margin: 20px 0;">
+                    <p style="margin: 5px 0;"><strong>Referenz:</strong> ' . $reference . '</p>
+                    <p style="margin: 5px 0;"><strong>Betrag:</strong> ' . $amount . ' €</p>
+                </div>
+                ' . $notesHtml;
+        } else {
+            $title = 'Erstattungsantrag abgelehnt';
+            $content = '
+                <h2 style="color: #dc2626; margin-top: 0;">Hallo ' . htmlspecialchars($firstName, ENT_QUOTES, 'UTF-8') . ',</h2>
+                <p style="font-size: 16px; color: #333; line-height: 1.6;">
+                    Ihr Erstattungsantrag konnte leider nicht genehmigt werden.
+                </p>
+                <div style="background-color: #f8f8f8; padding: 20px; border-radius: 5px; margin: 20px 0;">
+                    <p style="margin: 5px 0;"><strong>Referenz:</strong> ' . $reference . '</p>
+                    <p style="margin: 5px 0;"><strong>Betrag:</strong> ' . $amount . ' €</p>
+                </div>
+                ' . $notesHtml;
+        }
+
+        return self::getHtmlBase($title, $content);
+    }
+
     public static function generateTestEmail() {
         $content = '
             <h2 style="color: #dc2626; margin-top: 0;">Test-Email erfolgreich!</h2>

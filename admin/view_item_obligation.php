@@ -64,6 +64,24 @@ $items = $stmt->fetchAll();
 
 $outstanding = $obligation['total_amount'] - $obligation['paid_amount'];
 
+$expense_request = null;
+$expense_request_docs = [];
+try {
+    ensure_expense_request_support();
+    $stmt = $db->prepare("SELECT * FROM expense_requests WHERE linked_item_obligation_id = :id LIMIT 1");
+    $stmt->execute([':id' => $id]);
+    $expense_request = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    if ($expense_request) {
+        $stmt = $db->prepare("SELECT * FROM expense_request_documents WHERE expense_request_id = :id ORDER BY uploaded_at DESC");
+        $stmt->execute([':id' => $expense_request['id']]);
+        $expense_request_docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) {
+    $expense_request = null;
+    $expense_request_docs = [];
+}
+
 include 'includes/header.php';
 ?>
 
@@ -73,7 +91,7 @@ include 'includes/header.php';
             <i class="fas fa-arrow-left"></i> Zurück
         </a>
         <h1 style="display: inline-block; margin-left: 1rem;">
-            Artikel-Forderung #<?= $id ?>
+            <?= $expense_request ? 'Erstattungsantrag' : 'Artikel-Forderung' ?> #<?= $id ?>
         </h1>
     </div>
 </div>
@@ -213,6 +231,41 @@ include 'includes/header.php';
         </table>
     </div>
 </div>
+
+<?php if ($expense_request): ?>
+    <div class="card" style="margin-top: 1rem;">
+        <div class="card-header">
+            <h2>Erstattungsdetails</h2>
+        </div>
+        <div class="card-body">
+            <p><strong>Referenz:</strong> <?= htmlspecialchars($expense_request['transfer_reference']) ?></p>
+            <p><strong>Status:</strong>
+                <?php if ($expense_request['status'] === 'paid'): ?>
+                    <span class="badge badge-success">Ausgezahlt</span>
+                <?php elseif ($expense_request['status'] === 'approved'): ?>
+                    <span class="badge badge-primary">Genehmigt</span>
+                <?php elseif ($expense_request['status'] === 'rejected'): ?>
+                    <span class="badge badge-secondary">Abgelehnt</span>
+                <?php else: ?>
+                    <span class="badge badge-warning">Eingereicht</span>
+                <?php endif; ?>
+            </p>
+            <p><strong>Kontext:</strong><br><?= nl2br(htmlspecialchars($expense_request['expense_context'])) ?></p>
+            <?php if (!empty($expense_request['accountant_notes'])): ?>
+                <p><strong>Notiz Buchhaltung:</strong><br><?= nl2br(htmlspecialchars($expense_request['accountant_notes'])) ?></p>
+            <?php endif; ?>
+            <?php if (!empty($expense_request_docs)): ?>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;">
+                    <?php foreach ($expense_request_docs as $doc): ?>
+                        <a href="../uploads/<?= htmlspecialchars($doc['file_path']) ?>" target="_blank" class="btn btn-sm btn-secondary">
+                            <i class="fas fa-file"></i> <?= htmlspecialchars($doc['file_name']) ?>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+<?php endif; ?>
 
 <!-- Notes -->
 <?php if ($obligation['notes']): ?>

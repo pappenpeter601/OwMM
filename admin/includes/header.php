@@ -103,6 +103,12 @@
                     <i class="fas fa-envelope"></i> Zahlungserinnerungen
                 </a>
                 <?php endif; ?>
+
+                <?php if (has_permission('expense_requests.php')): ?>
+                <a href="expense_requests.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'expense_requests.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-receipt"></i> Belege Einreichen
+                </a>
+                <?php endif; ?>
                 
                 <?php if (can_check_transactions()): ?>
                 <a href="check_periods.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'check_periods.php' || basename($_SERVER['PHP_SELF']) == 'transaction_checking.php' ? 'active' : ''; ?>">

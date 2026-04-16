@@ -396,6 +396,132 @@ function can_edit_cash() {
 }
 
 /**
+ * Update the status of an expense request and sync the linked obligation.
+ */
+function update_expense_request_status($requestId, $newStatus, $notes = '', $currentUserId = null) {
+    if (!ensure_expense_request_support()) {
+        return ['success' => false, 'error' => 'Die Beleg-Einreichen-Funktion konnte nicht initialisiert werden.'];
+    }
+
+    $requestId = (int) $requestId;
+    $notes = trim((string) $notes);
+    $currentUserId = $currentUserId ?: ($_SESSION['user_id'] ?? null);
+
+    if ($requestId <= 0) {
+        return ['success' => false, 'error' => 'Antrag nicht gefunden.'];
+    }
+
+    if (!in_array($newStatus, ['approved', 'rejected', 'paid'], true)) {
+        return ['success' => false, 'error' => 'Ungültiger Status.'];
+    }
+
+    $db = getDBConnection();
+
+    try {
+        $stmt = $db->prepare("SELECT er.*, COALESCE(m.email, u.email, '') AS notification_email, COALESCE(m.first_name, '') AS member_first_name
+                              FROM expense_requests er
+                              LEFT JOIN members m ON er.member_id = m.id
+                              LEFT JOIN users u ON er.submitted_by_user_id = u.id
+                              WHERE er.id = :id");
+        $stmt->execute([':id' => $requestId]);
+        $requestRow = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$requestRow) {
+            throw new Exception('Antrag nicht gefunden.');
+        }
+
+        if ($newStatus === 'paid' && ($requestRow['status'] ?? '') !== 'approved') {
+            throw new Exception('Ein Antrag kann erst nach Genehmigung als ausgezahlt markiert werden.');
+        }
+
+        $db->beginTransaction();
+
+        $approvedAtSql = $newStatus === 'rejected' ? 'NULL' : 'NOW()';
+        $stmt = $db->prepare("UPDATE expense_requests
+                              SET status = :status,
+                                  accountant_notes = :accountant_notes,
+                                  approved_by = :approved_by,
+                                  approved_at = " . $approvedAtSql . "
+                              WHERE id = :id");
+        $stmt->execute([
+            ':status' => $newStatus,
+            ':accountant_notes' => $notes,
+            ':approved_by' => $currentUserId,
+            ':id' => $requestId
+        ]);
+
+        if (!empty($requestRow['linked_item_obligation_id'])) {
+            $obligationId = (int) $requestRow['linked_item_obligation_id'];
+
+            if ($newStatus === 'rejected') {
+                $stmt = $db->prepare("UPDATE item_obligations SET status = 'cancelled' WHERE id = :id");
+                $stmt->execute([':id' => $obligationId]);
+            } elseif ($newStatus === 'approved') {
+                $stmt = $db->prepare("UPDATE item_obligations SET status = 'open' WHERE id = :id");
+                $stmt->execute([':id' => $obligationId]);
+            } elseif ($newStatus === 'paid') {
+                $stmt = $db->prepare("SELECT total_amount, paid_amount FROM item_obligations WHERE id = :id");
+                $stmt->execute([':id' => $obligationId]);
+                $obligationRow = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($obligationRow) {
+                    $remainingAmount = max(0, (float) $obligationRow['total_amount'] - (float) $obligationRow['paid_amount']);
+                    if ($remainingAmount > 0) {
+                        $stmt = $db->prepare("INSERT INTO item_obligation_payments
+                                              (obligation_id, transaction_id, payment_date, amount, payment_method, notes, created_by)
+                                              VALUES (:obligation_id, NULL, CURDATE(), :amount, 'manual_transfer', :notes, :created_by)");
+                        $stmt->execute([
+                            ':obligation_id' => $obligationId,
+                            ':amount' => $remainingAmount,
+                            ':notes' => 'Im Bereich Offene Forderungen als ausgezahlt markiert',
+                            ':created_by' => $currentUserId
+                        ]);
+                    }
+
+                    $stmt = $db->prepare("UPDATE item_obligations
+                                          SET paid_amount = total_amount,
+                                              status = 'paid'
+                                          WHERE id = :id");
+                    $stmt->execute([':id' => $obligationId]);
+                }
+
+                sync_expense_request_status_from_obligation($obligationId);
+            }
+        }
+
+        $db->commit();
+
+        $requestRow['status'] = $newStatus;
+        $requestRow['accountant_notes'] = $notes;
+
+        try {
+            require_once __DIR__ . '/EmailService.php';
+            if (class_exists('EmailService')) {
+                $emailService = new EmailService();
+                $emailService->sendExpenseRequestStatusNotification($requestRow, $newStatus);
+            }
+        } catch (Exception $mailException) {
+            error_log('Expense request status mail failed: ' . $mailException->getMessage());
+        }
+
+        if ($newStatus === 'approved') {
+            $message = 'Antrag genehmigt.';
+        } elseif ($newStatus === 'paid') {
+            $message = 'Antrag als ausgezahlt markiert.';
+        } else {
+            $message = 'Antrag abgelehnt.';
+        }
+
+        return ['success' => true, 'message' => $message, 'request' => $requestRow];
+    } catch (Exception $e) {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+        return ['success' => false, 'error' => 'Fehler beim Aktualisieren des Status: ' . $e->getMessage()];
+    }
+}
+
+/**
  * Check if user can check transactions (admin or kassenpruefer)
  */
 function can_check_transactions() {
@@ -603,6 +729,8 @@ function upload_csv_transactions($file) {
                         ':amount' => $trans['amount'],
                         ':created_by' => $user_id
                     ]);
+                    $newTransactionId = (int) $db->lastInsertId();
+                    auto_match_expense_request_to_transaction($newTransactionId);
                     $inserted++;
                 } catch (Exception $e) {
                     $errors[] = "Zeile {$trans['line_number']}: " . $e->getMessage();
@@ -1333,6 +1461,553 @@ function is_supporter($user_id = null) {
         
         return ($result && $result['member_type'] === 'supporter');
     } catch (Exception $e) {
+        return false;
+    }
+}
+
+/**
+ * Ensure reimbursement request tables and permission exist.
+ */
+function ensure_expense_request_support() {
+    static $initialized = false;
+    if ($initialized) {
+        return true;
+    }
+
+    try {
+        $db = getDBConnection();
+
+        $db->exec("CREATE TABLE IF NOT EXISTS expense_requests (
+            id INT(11) NOT NULL AUTO_INCREMENT,
+            member_id INT(11) DEFAULT NULL,
+            submitted_by_user_id INT(11) DEFAULT NULL,
+            full_name_snapshot VARCHAR(150) NOT NULL,
+            iban VARCHAR(34) DEFAULT NULL,
+            transfer_reference VARCHAR(80) NOT NULL,
+            expense_context TEXT NOT NULL,
+            requested_amount_total DECIMAL(10,2) NOT NULL,
+            status ENUM('submitted','approved','rejected','paid') NOT NULL DEFAULT 'submitted',
+            linked_item_obligation_id INT(11) DEFAULT NULL,
+            accountant_notes TEXT DEFAULT NULL,
+            approved_by INT(11) DEFAULT NULL,
+            approved_at DATETIME DEFAULT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY transfer_reference (transfer_reference),
+            KEY member_id (member_id),
+            KEY submitted_by_user_id (submitted_by_user_id),
+            KEY linked_item_obligation_id (linked_item_obligation_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        $db->exec("CREATE TABLE IF NOT EXISTS expense_request_items (
+            id INT(11) NOT NULL AUTO_INCREMENT,
+            expense_request_id INT(11) NOT NULL,
+            description VARCHAR(255) NOT NULL,
+            amount DECIMAL(10,2) NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY expense_request_id (expense_request_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        $db->exec("CREATE TABLE IF NOT EXISTS expense_request_documents (
+            id INT(11) NOT NULL AUTO_INCREMENT,
+            expense_request_id INT(11) NOT NULL,
+            file_name VARCHAR(255) NOT NULL,
+            file_path VARCHAR(255) NOT NULL,
+            file_size INT(11) DEFAULT NULL,
+            uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            uploaded_by INT(11) DEFAULT NULL,
+            PRIMARY KEY (id),
+            KEY expense_request_id (expense_request_id),
+            KEY uploaded_by (uploaded_by)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        $stmt = $db->prepare("SELECT COUNT(*) FROM permissions WHERE name = ?");
+        $stmt->execute(['expense_requests.php']);
+        if ((int) $stmt->fetchColumn() === 0) {
+            $stmt = $db->prepare("INSERT INTO permissions (name, display_name, description, category) VALUES (?, ?, ?, ?)");
+            $stmt->execute([
+                'expense_requests.php',
+                'Belege Einreichen',
+                'Auslagen und Erstattungsanträge einreichen und verwalten',
+                'Finanzen'
+            ]);
+        }
+
+        $initialized = true;
+        return true;
+    } catch (Exception $e) {
+        error_log('ensure_expense_request_support failed: ' . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * Get the current user as linked member record.
+ */
+function get_current_member_record($user_id = null) {
+    if (!$user_id) {
+        $user_id = $_SESSION['user_id'] ?? null;
+    }
+    if (!$user_id) {
+        return null;
+    }
+
+    try {
+        $db = getDBConnection();
+        $stmt = $db->prepare("SELECT m.*
+                              FROM users u
+                              LEFT JOIN members m ON (u.member_id = m.id OR u.email = m.email)
+                              WHERE u.id = ?
+                              LIMIT 1");
+        $stmt->execute([$user_id]);
+        $member = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $member ?: null;
+    } catch (Exception $e) {
+        return null;
+    }
+}
+
+/**
+ * Normalize uploaded files array.
+ */
+function normalize_uploaded_files_array($files) {
+    if (empty($files) || !isset($files['name'])) {
+        return [];
+    }
+
+    if (!is_array($files['name'])) {
+        return [$files];
+    }
+
+    $normalized = [];
+    foreach ($files['name'] as $index => $name) {
+        $normalized[] = [
+            'name' => $files['name'][$index] ?? '',
+            'type' => $files['type'][$index] ?? '',
+            'tmp_name' => $files['tmp_name'][$index] ?? '',
+            'error' => $files['error'][$index] ?? UPLOAD_ERR_NO_FILE,
+            'size' => $files['size'][$index] ?? 0,
+        ];
+    }
+
+    return $normalized;
+}
+
+/**
+ * Generate a readable expense reference.
+ */
+function generate_expense_request_reference($request_id) {
+    return 'ERST-' . date('Y') . '-' . str_pad((int) $request_id, 6, '0', STR_PAD_LEFT);
+}
+
+/**
+ * Upload a reimbursement receipt.
+ */
+function upload_expense_request_document($file, $expense_request_id, $pdo = null) {
+    ensure_expense_request_support();
+
+    $allowed_types = ['application/pdf', 'application/x-pdf', 'image/jpeg', 'image/png', 'image/webp'];
+    $file_ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+
+    if (!in_array($file['type'], $allowed_types) && !in_array($file_ext, ['pdf', 'jpg', 'jpeg', 'png', 'webp'])) {
+        return ['success' => false, 'error' => 'Ungültiger Dateityp. Nur PDF, JPG, PNG und WEBP sind erlaubt.'];
+    }
+
+    if (($file['size'] ?? 0) > 5 * 1024 * 1024) {
+        return ['success' => false, 'error' => 'Datei zu groß. Maximum 5MB.'];
+    }
+
+    $upload_dir = ROOT_PATH . '/uploads/expense_requests/';
+    if (!is_dir($upload_dir) && !mkdir($upload_dir, 0755, true)) {
+        return ['success' => false, 'error' => 'Upload-Verzeichnis konnte nicht erstellt werden.'];
+    }
+
+    $file_name = 'expense_' . (int) $expense_request_id . '_' . time() . '_' . mt_rand(1000, 9999) . '.' . $file_ext;
+    $fs_path = $upload_dir . $file_name;
+    $db_path = 'expense_requests/' . $file_name;
+
+    if (!move_uploaded_file($file['tmp_name'], $fs_path)) {
+        return ['success' => false, 'error' => 'Fehler beim Hochladen der Datei.'];
+    }
+
+    chmod($fs_path, 0644);
+
+    try {
+        $db = $pdo ?: getDBConnection();
+        $stmt = $db->prepare("INSERT INTO expense_request_documents
+                              (expense_request_id, file_name, file_path, file_size, uploaded_by)
+                              VALUES (:expense_request_id, :file_name, :file_path, :file_size, :uploaded_by)");
+        $stmt->execute([
+            ':expense_request_id' => $expense_request_id,
+            ':file_name' => $file['name'],
+            ':file_path' => $db_path,
+            ':file_size' => $file['size'] ?? 0,
+            ':uploaded_by' => $_SESSION['user_id'] ?? null
+        ]);
+
+        return ['success' => true, 'file_path' => $db_path, 'fs_path' => $fs_path];
+    } catch (Exception $e) {
+        if (file_exists($fs_path)) {
+            unlink($fs_path);
+        }
+        return ['success' => false, 'error' => 'Datenbankfehler: ' . $e->getMessage()];
+    }
+}
+
+/**
+ * Create a reimbursement request and the linked outgoing obligation.
+ */
+function create_expense_request($formData, $items, $files, $user_id = null) {
+    if (!ensure_expense_request_support()) {
+        return ['success' => false, 'error' => 'Die Beleg-Einreichen-Funktion konnte nicht initialisiert werden.'];
+    }
+
+    $user_id = $user_id ?: ($_SESSION['user_id'] ?? null);
+    $member = get_current_member_record($user_id);
+
+    $full_name = sanitize_input($formData['full_name'] ?? (($member['first_name'] ?? '') . ' ' . ($member['last_name'] ?? '')));
+    $ibanInput = trim((string) ($formData['iban'] ?? ''));
+    if ($ibanInput === '' && !empty($member['iban'])) {
+        $ibanInput = (string) $member['iban'];
+    }
+    $iban = strtoupper(preg_replace('/\s+/', '', $ibanInput));
+    $expense_context = trim((string) ($formData['expense_context'] ?? ''));
+    $transferReferenceRaw = trim((string) ($formData['transfer_reference'] ?? ''));
+    $transferReferenceRaw = strtr($transferReferenceRaw, [
+        'Ä' => 'AE', 'Ö' => 'OE', 'Ü' => 'UE',
+        'ä' => 'ae', 'ö' => 'oe', 'ü' => 'ue',
+        'ß' => 'ss'
+    ]);
+    $transfer_reference = preg_replace('/\s+/', ' ', $transferReferenceRaw);
+    $directAmount = (float) str_replace(',', '.', (string) ($formData['total_amount'] ?? 0));
+
+    if ($full_name === '' || $expense_context === '') {
+        return ['success' => false, 'error' => 'Bitte füllen Sie Name, Referenz, Betrag und Kontext vollständig aus.'];
+    }
+    if ($transfer_reference === '') {
+        return ['success' => false, 'error' => 'Bitte geben Sie einen Verwendungszweck bzw. eine Referenz an.'];
+    }
+    if (mb_strlen($transfer_reference) > 80) {
+        return ['success' => false, 'error' => 'Die Referenz darf maximal 80 Zeichen lang sein.'];
+    }
+    if (preg_match("/[^A-Za-z0-9\/\-\?:\(\)\.,'\+ ]/u", $transfer_reference)) {
+        return ['success' => false, 'error' => "Die Referenz enthält nicht erlaubte Sonderzeichen. Erlaubt sind Buchstaben, Zahlen, Leerzeichen sowie / - ? : ( ) . , ' +"];
+    }
+    if ($iban !== '' && !preg_match('/^[A-Z]{2}[A-Z0-9]{13,32}$/', $iban)) {
+        return ['success' => false, 'error' => 'Bitte geben Sie eine gültige IBAN ein oder lassen Sie das Feld leer.'];
+    }
+
+    $validItems = [];
+    $calculatedTotal = 0.0;
+    foreach ($items as $item) {
+        $description = trim((string) ($item['description'] ?? ''));
+        $amount = (float) ($item['amount'] ?? 0);
+        if ($amount <= 0) {
+            continue;
+        }
+        if ($description === '') {
+            $description = $expense_context !== '' ? $expense_context : ('Erstattungsantrag ' . $transfer_reference);
+        }
+        $validItems[] = [
+            'description' => mb_substr($description, 0, 255),
+            'amount' => round($amount, 2)
+        ];
+        $calculatedTotal += round($amount, 2);
+    }
+
+    if (empty($validItems) && $directAmount > 0) {
+        $validItems[] = [
+            'description' => mb_substr($expense_context !== '' ? $expense_context : ('Erstattungsantrag ' . $transfer_reference), 0, 255),
+            'amount' => round($directAmount, 2)
+        ];
+        $calculatedTotal = round($directAmount, 2);
+    }
+
+    if (empty($validItems) || $calculatedTotal <= 0) {
+        return ['success' => false, 'error' => 'Bitte geben Sie einen gültigen Betrag an.'];
+    }
+
+    $normalizedFiles = array_values(array_filter(normalize_uploaded_files_array($files), function ($file) {
+        return ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
+    }));
+    if (empty($normalizedFiles)) {
+        return ['success' => false, 'error' => 'Bitte laden Sie mindestens einen Beleg hoch.'];
+    }
+
+    $db = getDBConnection();
+    $uploadedFsPaths = [];
+
+    try {
+        $stmt = $db->prepare("SELECT id FROM expense_requests WHERE transfer_reference = :reference LIMIT 1");
+        $stmt->execute([':reference' => $transfer_reference]);
+        if ($stmt->fetch(PDO::FETCH_ASSOC)) {
+            return ['success' => false, 'error' => 'Diese Referenz ist bereits vergeben. Bitte wählen Sie eine eindeutige Referenz.'];
+        }
+
+        $db->beginTransaction();
+
+        $stmt = $db->prepare("INSERT INTO expense_requests
+            (member_id, submitted_by_user_id, full_name_snapshot, iban, transfer_reference, expense_context, requested_amount_total, status)
+            VALUES (:member_id, :submitted_by_user_id, :full_name_snapshot, :iban, :transfer_reference, :expense_context, :requested_amount_total, 'submitted')");
+        $stmt->execute([
+            ':member_id' => $member['id'] ?? null,
+            ':submitted_by_user_id' => $user_id,
+            ':full_name_snapshot' => $full_name,
+            ':iban' => $iban,
+            ':transfer_reference' => $transfer_reference,
+            ':expense_context' => $expense_context,
+            ':requested_amount_total' => $calculatedTotal
+        ]);
+
+        $request_id = (int) $db->lastInsertId();
+
+        $itemStmt = $db->prepare("INSERT INTO expense_request_items (expense_request_id, description, amount)
+                                  VALUES (:expense_request_id, :description, :amount)");
+        foreach ($validItems as $item) {
+            $itemStmt->execute([
+                ':expense_request_id' => $request_id,
+                ':description' => $item['description'],
+                ':amount' => $item['amount']
+            ]);
+        }
+
+        $ibanForNotes = $iban !== '' ? $iban : 'nicht angegeben';
+        $obligationNotes = "[ERSTATTUNG]\nReferenz: {$transfer_reference}\nIBAN: {$ibanForNotes}\nKontext: {$expense_context}";
+        $oblStmt = $db->prepare("INSERT INTO item_obligations
+            (member_id, receiver_name, receiver_email, total_amount, paid_amount, status, notes, created_by)
+            VALUES (:member_id, :receiver_name, :receiver_email, :total_amount, 0.00, 'open', :notes, :created_by)");
+        $oblStmt->execute([
+            ':member_id' => $member['id'] ?? null,
+            ':receiver_name' => $full_name,
+            ':receiver_email' => $member['email'] ?? null,
+            ':total_amount' => $calculatedTotal,
+            ':notes' => $obligationNotes,
+            ':created_by' => $user_id
+        ]);
+
+        $linkedObligationId = (int) $db->lastInsertId();
+        $stmt = $db->prepare("UPDATE expense_requests SET linked_item_obligation_id = :linked_item_obligation_id WHERE id = :id");
+        $stmt->execute([
+            ':linked_item_obligation_id' => $linkedObligationId,
+            ':id' => $request_id
+        ]);
+
+        foreach ($normalizedFiles as $file) {
+            $uploadResult = upload_expense_request_document($file, $request_id, $db);
+            if (!$uploadResult['success']) {
+                throw new Exception($uploadResult['error']);
+            }
+            if (!empty($uploadResult['fs_path'])) {
+                $uploadedFsPaths[] = $uploadResult['fs_path'];
+            }
+        }
+
+        $db->commit();
+
+        try {
+            require_once __DIR__ . '/EmailService.php';
+            if (class_exists('EmailService')) {
+                $emailService = new EmailService();
+                $emailService->sendAdminExpenseRequestNotification([
+                    'full_name' => $full_name,
+                    'iban' => $iban,
+                    'reference' => $transfer_reference,
+                    'context' => $expense_context,
+                    'amount' => $calculatedTotal,
+                    'request_id' => $request_id,
+                    'items_count' => count($validItems)
+                ]);
+            }
+        } catch (Exception $mailException) {
+            error_log('Expense request mail failed: ' . $mailException->getMessage());
+        }
+
+        return [
+            'success' => true,
+            'request_id' => $request_id,
+            'reference' => $transfer_reference,
+            'linked_item_obligation_id' => $linkedObligationId
+        ];
+    } catch (Exception $e) {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+        foreach ($uploadedFsPaths as $fsPath) {
+            if (is_string($fsPath) && file_exists($fsPath)) {
+                unlink($fsPath);
+            }
+        }
+        return ['success' => false, 'error' => $e->getMessage()];
+    }
+}
+
+/**
+ * Get expense requests, optionally filtered by status or user.
+ */
+function get_expense_requests($status = null, $user_id = null, $limit = 100) {
+    if (!ensure_expense_request_support()) {
+        return [];
+    }
+
+    $db = getDBConnection();
+    $sql = "SELECT er.*, 
+                   COALESCE(m.first_name, '') AS member_first_name,
+                   COALESCE(m.last_name, '') AS member_last_name,
+                   COALESCE(m.email, u.email, '') AS notification_email,
+                   COUNT(DISTINCT eri.id) AS item_count,
+                   COUNT(DISTINCT erd.id) AS document_count
+            FROM expense_requests er
+            LEFT JOIN members m ON er.member_id = m.id
+            LEFT JOIN users u ON er.submitted_by_user_id = u.id
+            LEFT JOIN expense_request_items eri ON er.id = eri.expense_request_id
+            LEFT JOIN expense_request_documents erd ON er.id = erd.expense_request_id
+            WHERE 1=1";
+    $params = [];
+
+    if ($status) {
+        $sql .= " AND er.status = :status";
+        $params[':status'] = $status;
+    }
+    if ($user_id) {
+        $sql .= " AND er.submitted_by_user_id = :user_id";
+        $params[':user_id'] = $user_id;
+    }
+
+    $sql .= " GROUP BY er.id ORDER BY er.created_at DESC LIMIT " . (int) $limit;
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * Sync expense request status with the linked obligation payment state.
+ */
+function sync_expense_request_status_from_obligation($obligation_id) {
+    if (!ensure_expense_request_support()) {
+        return;
+    }
+
+    try {
+        $db = getDBConnection();
+        $stmt = $db->prepare("SELECT er.id, er.status AS request_status, io.status AS obligation_status
+                              FROM expense_requests er
+                              JOIN item_obligations io ON er.linked_item_obligation_id = io.id
+                              WHERE er.linked_item_obligation_id = ?
+                              LIMIT 1");
+        $stmt->execute([$obligation_id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return;
+        }
+
+        $newStatus = $row['request_status'];
+        if ($row['obligation_status'] === 'paid') {
+            $newStatus = 'paid';
+        } elseif ($row['request_status'] !== 'rejected') {
+            $newStatus = 'approved';
+        }
+
+        $stmt = $db->prepare("UPDATE expense_requests SET status = :status WHERE id = :id");
+        $stmt->execute([
+            ':status' => $newStatus,
+            ':id' => $row['id']
+        ]);
+    } catch (Exception $e) {
+        error_log('sync_expense_request_status_from_obligation failed: ' . $e->getMessage());
+    }
+}
+
+/**
+ * Try to auto-match an imported outgoing transaction to a reimbursement request by reference.
+ */
+function auto_match_expense_request_to_transaction($transaction_id) {
+    if (!ensure_expense_request_support()) {
+        return false;
+    }
+
+    try {
+        $db = getDBConnection();
+        $stmt = $db->prepare("SELECT * FROM transactions WHERE id = :id LIMIT 1");
+        $stmt->execute([':id' => $transaction_id]);
+        $transaction = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$transaction || (float) $transaction['amount'] >= 0) {
+            return false;
+        }
+
+        $searchHaystack = mb_strtolower(trim(($transaction['purpose'] ?? '') . ' ' . ($transaction['booking_text'] ?? '')));
+        if ($searchHaystack === '') {
+            return false;
+        }
+
+        $stmt = $db->query("SELECT er.id, er.transfer_reference, er.linked_item_obligation_id, io.total_amount, io.paid_amount, io.status
+                            FROM expense_requests er
+                            JOIN item_obligations io ON er.linked_item_obligation_id = io.id
+                            WHERE er.linked_item_obligation_id IS NOT NULL
+                              AND er.status IN ('submitted','approved','paid')
+                              AND io.status = 'open'");
+
+        $match = null;
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $candidate) {
+            $reference = mb_strtolower(trim($candidate['transfer_reference'] ?? ''));
+            if ($reference !== '' && mb_strpos($searchHaystack, $reference) !== false) {
+                $match = $candidate;
+                break;
+            }
+        }
+
+        if (!$match) {
+            return false;
+        }
+
+        $stmt = $db->prepare("SELECT COUNT(*) FROM item_obligation_payments WHERE transaction_id = :transaction_id AND obligation_id = :obligation_id");
+        $stmt->execute([
+            ':transaction_id' => $transaction_id,
+            ':obligation_id' => $match['linked_item_obligation_id']
+        ]);
+        if ((int) $stmt->fetchColumn() > 0) {
+            return true;
+        }
+
+        $available = abs((float) $transaction['amount']);
+        $remaining = max(0, (float) $match['total_amount'] - (float) $match['paid_amount']);
+        $linkAmount = min($available, $remaining);
+        if ($linkAmount <= 0) {
+            return false;
+        }
+
+        $db->beginTransaction();
+        $stmt = $db->prepare("INSERT INTO item_obligation_payments
+            (obligation_id, transaction_id, payment_date, amount, payment_method, notes, created_by)
+            VALUES (:obligation_id, :transaction_id, :payment_date, :amount, :payment_method, :notes, :created_by)");
+        $stmt->execute([
+            ':obligation_id' => $match['linked_item_obligation_id'],
+            ':transaction_id' => $transaction_id,
+            ':payment_date' => $transaction['booking_date'],
+            ':amount' => $linkAmount,
+            ':payment_method' => 'bank',
+            ':notes' => 'Automatisch per Referenz verknüpft',
+            ':created_by' => $_SESSION['user_id'] ?? null
+        ]);
+
+        $newPaid = (float) $match['paid_amount'] + $linkAmount;
+        $newStatus = $newPaid + 0.0001 >= (float) $match['total_amount'] ? 'paid' : 'open';
+        $stmt = $db->prepare("UPDATE item_obligations SET paid_amount = :paid_amount, status = :status WHERE id = :id");
+        $stmt->execute([
+            ':paid_amount' => $newPaid,
+            ':status' => $newStatus,
+            ':id' => $match['linked_item_obligation_id']
+        ]);
+        $db->commit();
+
+        sync_expense_request_status_from_obligation($match['linked_item_obligation_id']);
+        return true;
+    } catch (Exception $e) {
+        if (isset($db) && $db->inTransaction()) {
+            $db->rollBack();
+        }
+        error_log('auto_match_expense_request_to_transaction failed: ' . $e->getMessage());
         return false;
     }
 }
