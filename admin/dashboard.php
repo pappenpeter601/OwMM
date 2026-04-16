@@ -36,7 +36,7 @@ $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_p
                       has_permission('kassenpruefer_assignments.php') || has_permission('approve_registrations.php') || 
                       has_permission('settings.php') || has_permission('check_periods.php') || 
                       has_permission('selfservice.php') || has_permission('calendar.php') ||
-                      has_permission('expense_requests.php');
+                      has_permission('expense_requests.php') || has_permission('financial_report.php');
 ?>
 
 <?php if (!$has_any_permission): ?>
@@ -200,6 +200,7 @@ $perm_details = [
     'approve_registrations.php' => ['icon' => '👤', 'title' => 'Registrierungen', 'desc' => 'Neue Benutzerregistrierungen genehmigen', 'url' => 'approve_registrations.php'],
     'settings.php' => ['icon' => '⚙️', 'title' => 'Einstellungen', 'desc' => 'System- und Benutzereinstellungen', 'url' => 'settings.php'],
     'kontofuehrung.php' => ['icon' => '💰', 'title' => 'Kontoführung', 'desc' => 'Kassenprüfung und Transaktionsverwaltung', 'url' => 'kontofuehrung.php'],
+    'financial_report.php' => ['icon' => '📈', 'title' => 'Finanzbericht', 'desc' => 'Kennzahlen, Zeitverlauf und Kategorien-Auswertung', 'url' => 'financial_report.php'],
     'members.php' => ['icon' => '👤', 'title' => 'Mitglieder', 'desc' => 'Mitgliederverwaltung und Beiträge', 'url' => 'members.php'],
     'generate_obligations.php' => ['icon' => '📋', 'title' => 'Beitragsforderungen', 'desc' => 'Jahresbeiträge generieren und verwalten', 'url' => 'generate_obligations.php'],
     'items.php' => ['icon' => '📦', 'title' => 'Artikel', 'desc' => 'Artikel und Gegenstände verwalten', 'url' => 'items.php'],

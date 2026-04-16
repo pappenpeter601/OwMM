@@ -12,7 +12,7 @@ if (!is_logged_in() || (!is_admin() && !has_permission('check_periods.php'))) {
 
 $page_title = 'Transaktionen prüfen';
 $db = getDBConnection();
-ensure_expense_request_support();
+ensure_financial_reporting_support();
 
 // Get period_id from URL
 $period_id = isset($_GET['period_id']) ? intval($_GET['period_id']) : 0;
@@ -186,13 +186,16 @@ if (!empty($transactions)) {
 // Prefetch linked documents and obligations for efficient checking
 $transactionIds = array_column($transactions, 'id');
 $documentsByTransaction = [];
+$documentKeysByTransaction = [];
 $obligationsByTransaction = [];
 $linkSummaryByTransaction = [];
 $transactionMeta = [];
+$itemObligationTransactionMap = [];
 
 foreach ($transactions as $tx) {
     $txId = (int) $tx['id'];
     $documentsByTransaction[$txId] = [];
+    $documentKeysByTransaction[$txId] = [];
     $obligationsByTransaction[$txId] = [];
     $linkSummaryByTransaction[$txId] = [
         'doc_count' => 0,
@@ -215,10 +218,32 @@ foreach ($transactions as $tx) {
     ];
 }
 
+$addDocumentToTransaction = static function (int $txId, array $doc, string $sourceLabel = '') use (&$documentsByTransaction, &$documentKeysByTransaction, &$linkSummaryByTransaction): void {
+    if (!isset($documentsByTransaction[$txId])) {
+        return;
+    }
+
+    $filePath = (string)($doc['file_path'] ?? '');
+    $fileName = (string)($doc['file_name'] ?? '');
+    if ($filePath === '' && $fileName === '') {
+        return;
+    }
+
+    $docKey = $filePath . '|' . $fileName;
+    if (isset($documentKeysByTransaction[$txId][$docKey])) {
+        return;
+    }
+
+    $doc['source_label'] = $sourceLabel;
+    $documentsByTransaction[$txId][] = $doc;
+    $documentKeysByTransaction[$txId][$docKey] = true;
+    $linkSummaryByTransaction[$txId]['doc_count'] = count($documentsByTransaction[$txId]);
+};
+
 if (!empty($transactionIds)) {
     $placeholders = implode(',', array_fill(0, count($transactionIds), '?'));
 
-    // All documents per transaction
+    // Directly linked transaction documents
     $stmt = $db->prepare("SELECT transaction_id, file_name, file_path, file_size, uploaded_at
                           FROM transaction_documents
                           WHERE transaction_id IN ($placeholders)
@@ -226,12 +251,12 @@ if (!empty($transactionIds)) {
     $stmt->execute($transactionIds);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $doc) {
         $txId = (int) $doc['transaction_id'];
-        $documentsByTransaction[$txId][] = $doc;
-        $linkSummaryByTransaction[$txId]['doc_count']++;
+        $addDocumentToTransaction($txId, $doc, 'Transaktion');
     }
 
-    // Expense request documents linked via reimbursement obligations
-    $stmt = $db->prepare("SELECT DISTINCT p.transaction_id, erd.file_name, erd.file_path, erd.file_size, erd.uploaded_at
+    // Expense request documents already attached to linked reimbursement obligations
+    $stmt = $db->prepare("SELECT DISTINCT p.transaction_id, er.linked_item_obligation_id AS obligation_id,
+                                 erd.file_name, erd.file_path, erd.file_size, erd.uploaded_at
                           FROM item_obligation_payments p
                           JOIN expense_requests er ON er.linked_item_obligation_id = p.obligation_id
                           JOIN expense_request_documents erd ON erd.expense_request_id = er.id
@@ -240,8 +265,7 @@ if (!empty($transactionIds)) {
     $stmt->execute($transactionIds);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $doc) {
         $txId = (int) $doc['transaction_id'];
-        $documentsByTransaction[$txId][] = $doc;
-        $linkSummaryByTransaction[$txId]['doc_count']++;
+        $addDocumentToTransaction($txId, $doc, 'Erstattungsbeleg');
     }
 
     // Linked member fee obligations per transaction
@@ -249,10 +273,13 @@ if (!empty($transactionIds)) {
                                  o.id as obligation_id, o.fee_year, o.status,
                                  m.id as member_id, m.first_name, m.last_name, m.member_number,
                                  'fee' as obligation_type,
-                                 CONCAT('Mitgliedsbeitrag ', o.fee_year) as description
+                                 CONCAT('Mitgliedsbeitrag ', o.fee_year) as description,
+                                 tc.name AS category_name,
+                                 tc.color AS category_color
                           FROM member_payments p
                           JOIN member_fee_obligations o ON p.obligation_id = o.id
                           JOIN members m ON o.member_id = m.id
+                          LEFT JOIN transaction_categories tc ON o.category_id = tc.id
                           WHERE p.transaction_id IN ($placeholders)
                           ORDER BY p.payment_date DESC");
     $stmt->execute($transactionIds);
@@ -271,21 +298,90 @@ if (!empty($transactionIds)) {
                                  COALESCE(m.last_name, o.receiver_name) as last_name,
                                  COALESCE(m.member_number, '') as member_number,
                                  CASE WHEN er.id IS NOT NULL THEN 'expense' ELSE 'item' END as obligation_type,
-                                 CASE WHEN er.id IS NOT NULL THEN CONCAT('Erstattungsantrag ', er.transfer_reference) ELSE CONCAT('Artikel-Forderung #', o.id) END as description,
+                                 CASE WHEN er.id IS NOT NULL THEN CONCAT('Erstattungsantrag ', er.transfer_reference) ELSE CONCAT('Forderung #', o.id) END as description,
                                  COALESCE(er.transfer_reference, '') as reference_code,
-                                 COALESCE(er.expense_context, '') as expense_context
+                                 COALESCE(er.expense_context, '') as expense_context,
+                                 tc.name AS category_name,
+                                 tc.color AS category_color
                           FROM item_obligation_payments p
                           JOIN item_obligations o ON p.obligation_id = o.id
                           LEFT JOIN members m ON o.member_id = m.id
                           LEFT JOIN expense_requests er ON er.linked_item_obligation_id = o.id
+                          LEFT JOIN transaction_categories tc ON o.category_id = tc.id
                           WHERE p.transaction_id IN ($placeholders)
                           ORDER BY p.payment_date DESC");
     $stmt->execute($transactionIds);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $obl) {
         $txId = (int) $obl['transaction_id'];
+        $obligationId = (int) ($obl['obligation_id'] ?? 0);
         $obligationsByTransaction[$txId][] = $obl;
         $linkSummaryByTransaction[$txId]['obligation_count']++;
         $linkSummaryByTransaction[$txId]['linked_total'] += (float) $obl['amount'];
+
+        if ($obligationId > 0) {
+            if (!isset($itemObligationTransactionMap[$obligationId])) {
+                $itemObligationTransactionMap[$obligationId] = [];
+            }
+            if (!in_array($txId, $itemObligationTransactionMap[$obligationId], true)) {
+                $itemObligationTransactionMap[$obligationId][] = $txId;
+            }
+        }
+    }
+
+    if (!empty($itemObligationTransactionMap)) {
+        $obligationIds = array_keys($itemObligationTransactionMap);
+        $obligationPlaceholders = implode(',', array_fill(0, count($obligationIds), '?'));
+
+        $docQueries = [
+            [
+                'sql' => "SELECT er.linked_item_obligation_id AS obligation_id, erd.file_name, erd.file_path, erd.file_size, erd.uploaded_at
+                          FROM expense_requests er
+                          JOIN expense_request_documents erd ON erd.expense_request_id = er.id
+                          WHERE er.linked_item_obligation_id IN ($obligationPlaceholders)
+                          ORDER BY erd.uploaded_at DESC",
+                'source' => 'Erstattungsbeleg'
+            ],
+            [
+                'sql' => "SELECT iod.obligation_id, iod.file_name, iod.file_path, iod.file_size, iod.uploaded_at
+                          FROM item_obligation_documents iod
+                          WHERE iod.obligation_id IN ($obligationPlaceholders)
+                          ORDER BY iod.uploaded_at DESC",
+                'source' => 'Forderungsdokument'
+            ],
+            [
+                'sql' => "SELECT p.obligation_id, td.file_name, td.file_path, td.file_size, td.uploaded_at
+                          FROM item_obligation_payments p
+                          JOIN transaction_documents td ON td.transaction_id = p.transaction_id
+                          WHERE p.obligation_id IN ($obligationPlaceholders)
+                          ORDER BY td.uploaded_at DESC",
+                'source' => 'Zahlungsbeleg'
+            ],
+            [
+                'sql' => "SELECT p.obligation_id, td.file_name, td.file_path, td.file_size, td.uploaded_at
+                          FROM item_obligation_payments p
+                          JOIN transactions t ON t.id = p.transaction_id
+                          JOIN transaction_documents td ON td.id = t.document_id
+                          WHERE p.obligation_id IN ($obligationPlaceholders)
+                          ORDER BY td.id DESC",
+                'source' => 'Verknüpfte Transaktion'
+            ]
+        ];
+
+        foreach ($docQueries as $docQuery) {
+            $stmt = $db->prepare($docQuery['sql']);
+            $stmt->execute($obligationIds);
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $doc) {
+                $obligationId = (int) ($doc['obligation_id'] ?? 0);
+                if ($obligationId <= 0 || empty($itemObligationTransactionMap[$obligationId])) {
+                    continue;
+                }
+
+                foreach ($itemObligationTransactionMap[$obligationId] as $txId) {
+                    $doc['obligation_id'] = $obligationId;
+                    $addDocumentToTransaction($txId, $doc, $docQuery['source']);
+                }
+            }
+        }
     }
 }
 
@@ -728,6 +824,9 @@ function renderPreview(id) {
             const memberInfo = obl.member_number ? ` (${escapeHtml(obl.member_number)})` : '';
             const referenceInfo = obl.reference_code ? `<div class="obligation-card-meta"><strong>Referenz:</strong> ${escapeHtml(obl.reference_code)}</div>` : '';
             const contextInfo = obl.expense_context ? `<div class="obligation-card-meta">${escapeHtml(obl.expense_context)}</div>` : '';
+            const categoryInfo = obl.category_name
+                ? `<div class="obligation-card-meta"><span class="category-badge-inline" style="background-color: ${safeColor(obl.category_color)}">${escapeHtml(obl.category_name)}</span></div>`
+                : '';
 
             return `
                 <a href="${targetUrl}" target="_blank" class="obligation-card">
@@ -738,6 +837,7 @@ function renderPreview(id) {
                     <div class="obligation-card-meta">
                         ${yearInfo}${escapeHtml(obl.description || '')}
                     </div>
+                    ${categoryInfo}
                     ${referenceInfo}
                     ${contextInfo}
                     <div class="obligation-card-meta">
@@ -752,10 +852,14 @@ function renderPreview(id) {
     const docButtonsHtml = docs.length
         ? docs.map((doc, idx) => {
             const size = doc.file_size ? ` · ${(Number(doc.file_size) / 1024).toFixed(1).replace('.', ',')} KB` : '';
+            const source = doc.source_label
+                ? `<span class="doc-source">${escapeHtml(doc.source_label)}${doc.obligation_id ? ' · Verpflichtung #' + escapeHtml(doc.obligation_id) : ''}</span>`
+                : '';
             return `
                 <button type="button" class="doc-picker ${idx === 0 ? 'is-active' : ''}" onclick="showDoc(${id}, ${idx}); return false;">
                     <i class="fas fa-file-alt"></i>
-                    ${escapeHtml(doc.file_name || 'Beleg')}${size}
+                    <span>${escapeHtml(doc.file_name || 'Beleg')}${size}</span>
+                    ${source}
                 </button>
             `;
         }).join('')
@@ -805,7 +909,7 @@ function renderPreview(id) {
             <div class="obligation-preview-list">${obligationHtml}</div>
         </div>
         <div class="preview-section">
-            <h4><i class="fas fa-file-alt"></i> Belege / Bilder</h4>
+            <h4><i class="fas fa-file-alt"></i> Belege / Bilder aus Transaktion und Verpflichtungen</h4>
             <div class="preview-doc-buttons">${docButtonsHtml}</div>
             ${docs.length ? '<div class="preview-frame" id="preview-frame"></div>' : ''}
         </div>
@@ -1397,6 +1501,13 @@ document.addEventListener('DOMContentLoaded', function() {
     flex-direction: column;
     gap: 6px;
     margin-bottom: 10px;
+}
+
+.doc-source {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.78rem;
+    color: #546e7a;
 }
 
 .doc-picker {

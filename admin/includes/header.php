@@ -87,6 +87,11 @@
                 <a href="kontofuehrung.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'kontofuehrung.php' ? 'active' : ''; ?>">
                     <i class="fas fa-wallet"></i> Kontoführung
                 </a>
+                <?php if (has_permission('financial_report.php')): ?>
+                <a href="financial_report.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'financial_report.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-chart-line"></i> Finanzbericht
+                </a>
+                <?php endif; ?>
                 <a href="members.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'members.php' ? 'active' : ''; ?>">
                     <i class="fas fa-user"></i> Mitglieder
                 </a>

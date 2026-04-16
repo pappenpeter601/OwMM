@@ -148,7 +148,8 @@ include 'includes/header.php';
 
                 <div class="form-group">
                     <label for="total_amount">Betrag *</label>
-                    <input type="number" id="total_amount" name="total_amount" class="form-control total-amount-input" placeholder="0,00" min="0.01" step="0.01" required>
+                    <input type="text" id="total_amount" name="total_amount" class="form-control total-amount-input" inputmode="decimal" placeholder="0,00" required>
+                    <small>Bitte im Format 12,34 eingeben.</small>
                 </div>
             </div>
 
@@ -381,10 +382,29 @@ include 'includes/header.php';
 </style>
 
 <script>
+function normalizeGermanAmountInput(input) {
+    if (!input) return;
+    let value = String(input.value || '');
+    value = value.replace(/\./g, ',');
+    value = value.replace(/[^0-9,]/g, '');
+
+    const firstComma = value.indexOf(',');
+    if (firstComma !== -1) {
+        const before = value.slice(0, firstComma + 1);
+        const after = value.slice(firstComma + 1).replace(/,/g, '').slice(0, 2);
+        value = before + after;
+    }
+
+    input.value = value;
+}
+
+function parseGermanAmount(value) {
+    return parseFloat(String(value || '0').replace(/\./g, '').replace(',', '.')) || 0;
+}
+
 function updateTotal() {
     const totalInput = document.getElementById('total_amount');
-    const rawValue = totalInput ? String(totalInput.value || '0').replace(',', '.') : '0';
-    const total = Number(rawValue || 0);
+    const total = parseGermanAmount(totalInput ? totalInput.value : '0');
 
     document.getElementById('request-total').textContent = total.toLocaleString('de-DE', {
         minimumFractionDigits: 2,
@@ -395,7 +415,18 @@ function updateTotal() {
 document.addEventListener('DOMContentLoaded', function() {
     const totalInput = document.getElementById('total_amount');
     if (totalInput) {
-        totalInput.addEventListener('input', updateTotal);
+        totalInput.addEventListener('input', function() {
+            normalizeGermanAmountInput(this);
+            updateTotal();
+        });
+        totalInput.addEventListener('blur', function() {
+            const amount = parseGermanAmount(this.value);
+            this.value = amount > 0 ? amount.toLocaleString('de-DE', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }) : '';
+            updateTotal();
+        });
     }
     updateTotal();
 

@@ -15,6 +15,8 @@ if (!$member_id) {
     exit;
 }
 
+ensure_financial_reporting_support();
+
 $db = getDBConnection();
 $member = get_member($member_id);
 
@@ -41,11 +43,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($stmt->fetch()) {
                 $error = 'Beitragsforderung für dieses Jahr existiert bereits.';
             } else {
+                $defaultCategoryId = get_default_obligation_category_id($member['member_type']);
                 $stmt = $db->prepare("INSERT INTO member_fee_obligations 
-                                     (member_id, fee_year, fee_amount, generated_date, due_date, created_by)
-                                     VALUES (:member_id, :year, :amount, :generated_date, :due_date, :created_by)");
+                                     (member_id, category_id, fee_year, fee_amount, generated_date, due_date, created_by)
+                                     VALUES (:member_id, :category_id, :year, :amount, :generated_date, :due_date, :created_by)");
                 $stmt->execute([
                     'member_id' => $member_id,
+                    'category_id' => $defaultCategoryId,
                     'year' => $fee_year,
                     'amount' => $fee['minimum_amount'],
                     'generated_date' => date('Y-m-d'),

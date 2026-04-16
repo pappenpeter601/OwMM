@@ -14,23 +14,79 @@ if (!is_logged_in() || !has_permission('outstanding_obligations.php')) {
     exit;
 }
 
-ensure_expense_request_support();
+ensure_financial_reporting_support();
 
 $year = $_GET['year'] ?? date('Y');
 $tab = $_GET['tab'] ?? 'fees'; // 'fees' or 'items'
 $search = $_GET['search'] ?? '';
 $status_filter = $_GET['status'] ?? ''; // filter for fees/items and reimbursement review states
 $member_type_filter = $_GET['member_type'] ?? ''; // 'active', 'supporter', 'pensioner'
+$category_filter = $_GET['category_id'] ?? ''; // category id or 'none'
 $db = getDBConnection();
+$stmt = $db->query("SELECT id, name, color, active FROM transaction_categories ORDER BY active DESC, sort_order, name");
+$categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$category_lookup = [];
+foreach ($categories as $categoryRow) {
+    $category_lookup[(string)$categoryRow['id']] = $categoryRow['name'];
+}
 $success = '';
 $error = '';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_obligation_category') {
+    $obligationId = (int) ($_POST['obligation_id'] ?? 0);
+    $obligationType = $_POST['obligation_type'] ?? '';
+    $categoryId = ($_POST['category_id'] ?? '') !== '' ? (int) $_POST['category_id'] : null;
+    $targetTab = $_POST['target_tab'] ?? $tab;
+
+    try {
+        if ($obligationId <= 0) {
+            throw new Exception('Verpflichtung nicht gefunden.');
+        }
+
+        if ($obligationType === 'fee') {
+            $stmt = $db->prepare("UPDATE member_fee_obligations SET category_id = :category_id WHERE id = :id");
+        } elseif ($obligationType === 'item') {
+            $stmt = $db->prepare("UPDATE item_obligations SET category_id = :category_id WHERE id = :id");
+        } else {
+            throw new Exception('Ungültiger Verpflichtungstyp.');
+        }
+
+        $stmt->bindValue(':id', $obligationId, PDO::PARAM_INT);
+        $stmt->bindValue(':category_id', $categoryId, $categoryId === null ? PDO::PARAM_NULL : PDO::PARAM_INT);
+        $stmt->execute();
+
+        $_SESSION['success'] = $categoryId ? 'Kategorie aktualisiert.' : 'Kategorie entfernt.';
+    } catch (Exception $e) {
+        $_SESSION['error'] = $e->getMessage();
+    }
+
+    $redirectParams = [
+        'year' => $year,
+        'tab' => $targetTab
+    ];
+    if ($search !== '') {
+        $redirectParams['search'] = $search;
+    }
+    if ($status_filter !== '') {
+        $redirectParams['status'] = $status_filter;
+    }
+    if ($member_type_filter !== '') {
+        $redirectParams['member_type'] = $member_type_filter;
+    }
+    if ($category_filter !== '') {
+        $redirectParams['category_id'] = $category_filter;
+    }
+
+    redirect('outstanding_obligations.php?' . http_build_query($redirectParams));
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'review_expense_request') {
     $requestId = (int) ($_POST['request_id'] ?? 0);
     $newStatus = $_POST['new_status'] ?? '';
     $notes = trim($_POST['accountant_notes'] ?? '');
 
-    $result = update_expense_request_status($requestId, $newStatus, $notes, $_SESSION['user_id'] ?? null);
+    $categoryId = !empty($_POST['category_id']) ? (int) $_POST['category_id'] : null;
+    $result = update_expense_request_status($requestId, $newStatus, $notes, $_SESSION['user_id'] ?? null, $categoryId);
     if (!empty($result['success'])) {
         $_SESSION['success'] = $result['message'] ?? 'Antrag aktualisiert.';
     } else {
@@ -49,6 +105,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'revie
     }
     if ($member_type_filter !== '') {
         $redirectParams['member_type'] = $member_type_filter;
+    }
+    if ($category_filter !== '') {
+        $redirectParams['category_id'] = $category_filter;
     }
 
     redirect('outstanding_obligations.php?' . http_build_query($redirectParams));
@@ -87,6 +146,16 @@ if (!empty($member_type_filter)) {
     });
 }
 
+if ($category_filter !== '') {
+    $open_obligations = array_filter($open_obligations, function($obl) use ($category_filter) {
+        $currentCategoryId = $obl['category_id'] ?? null;
+        if ($category_filter === 'none') {
+            return empty($currentCategoryId);
+        }
+        return (int)$currentCategoryId === (int)$category_filter;
+    });
+}
+
 // Get ALL fee obligations for the year (including paid) for accurate totals
 $stmt = $db->prepare("SELECT fee_amount, paid_amount, (fee_amount - paid_amount) as outstanding
                       FROM member_fee_obligations
@@ -120,11 +189,15 @@ try {
                                   er.expense_context,
                                   er.accountant_notes,
                                   er.created_at AS expense_requested_at,
-                                  (SELECT COUNT(*) FROM expense_request_documents erd WHERE erd.expense_request_id = er.id) AS document_count
+                                  (SELECT COUNT(*) FROM expense_request_documents erd WHERE erd.expense_request_id = er.id) AS document_count,
+                                  (SELECT COUNT(*) FROM item_obligation_documents iod WHERE iod.obligation_id = io.id) AS obligation_document_count,
+                                  tc.name AS category_name,
+                                  tc.color AS category_color
                           FROM item_obligations io
                           LEFT JOIN members m ON io.member_id = m.id
                           LEFT JOIN members om ON io.organizing_member_id = om.id
                           LEFT JOIN expense_requests er ON er.linked_item_obligation_id = io.id
+                          LEFT JOIN transaction_categories tc ON io.category_id = tc.id
                           ORDER BY CASE COALESCE(er.status, '')
                                      WHEN 'submitted' THEN 0
                                      WHEN 'approved' THEN 1
@@ -167,6 +240,16 @@ try {
         });
     }
 
+    if ($category_filter !== '') {
+        $open_item_obligations = array_filter($open_item_obligations, function($obl) use ($category_filter) {
+            $currentCategoryId = $obl['category_id'] ?? null;
+            if ($category_filter === 'none') {
+                return empty($currentCategoryId);
+            }
+            return (int)$currentCategoryId === (int)$category_filter;
+        });
+    }
+
     // Calculate totals from ALL item obligations (including paid) 
     $stmt = $db->prepare("SELECT total_amount, paid_amount, (total_amount - paid_amount) as outstanding
                           FROM item_obligations");
@@ -199,9 +282,14 @@ include 'includes/header.php';
         <h1 style="display: inline-block; margin-left: 1rem;">
             Offene Forderungen
         </h1>
-        <a href="create_item_obligation.php" class="btn btn-primary" style="float: right;">
-            <i class="fas fa-plus"></i> Artikel-Forderung hinzufügen
-        </a>
+        <div style="float: right; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <a href="expense_requests.php" class="btn btn-secondary">
+                <i class="fas fa-receipt"></i> Erstattung einreichen
+            </a>
+            <a href="create_item_obligation.php" class="btn btn-primary">
+                <i class="fas fa-plus"></i> Forderung hinzufügen
+            </a>
+        </div>
     </div>
 </div>
 
@@ -294,7 +382,7 @@ include 'includes/header.php';
 <div class="section-card">
     <h2>Filter</h2>
     <form method="GET" class="filter-form" style="display: flex; flex-direction: column; gap: 0.75rem;">
-        <!-- Row 1: Year, Member Type and Status filters -->
+        <!-- Row 1: Year, Member Type, Status and Category filters -->
         <div class="filter-row" style="display: flex; flex-wrap: wrap; gap: 1rem; width: 100%;">
             <div class="form-group">
                 <label for="year">Jahr</label>
@@ -324,6 +412,18 @@ include 'includes/header.php';
                     <option value="approved" <?= $status_filter === 'approved' ? 'selected' : '' ?>>Genehmigt</option>
                     <option value="rejected" <?= $status_filter === 'rejected' ? 'selected' : '' ?>>Abgelehnt</option>
                     <option value="cancelled" <?= $status_filter === 'cancelled' ? 'selected' : '' ?>>Storniert</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="category_id">Kategorie</label>
+                <select id="category_id" name="category_id">
+                    <option value="">Alle Kategorien</option>
+                    <option value="none" <?= $category_filter === 'none' ? 'selected' : '' ?>>Ohne Kategorie</option>
+                    <?php foreach ($categories as $cat): ?>
+                        <option value="<?= (int)$cat['id'] ?>" <?= ((string)$category_filter === (string)$cat['id']) ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($cat['name'] . (!empty($cat['active']) ? '' : ' (inaktiv)')) ?>
+                        </option>
+                    <?php endforeach; ?>
                 </select>
             </div>
         </div>
@@ -359,6 +459,9 @@ if ($status_filter !== '') {
     $status_labels = ['open' => 'Offen', 'partial' => 'Teilzahlung', 'paid' => 'Bezahlt', 'submitted' => 'Eingereicht', 'approved' => 'Genehmigt', 'rejected' => 'Abgelehnt', 'cancelled' => 'Storniert'];
     $active_filters[] = 'Status: ' . ($status_labels[$status_filter] ?? $status_filter);
 }
+if ($category_filter !== '') {
+    $active_filters[] = 'Kategorie: ' . ($category_filter === 'none' ? 'Ohne Kategorie' : ($category_lookup[(string)$category_filter] ?? $category_filter));
+}
 if ($search !== '') {
     $active_filters[] = 'Suche: "' . htmlspecialchars($search) . '"';
 }
@@ -372,20 +475,20 @@ if ($search !== '') {
 
 <!-- Tab Navigation -->
 <div class="tabs" style="margin: 1rem 0; border-bottom: 2px solid #e0e0e0; display: flex; gap: 0;">
-    <a href="?year=<?= $year ?>&tab=fees&search=<?= urlencode($search) ?>&status=<?= urlencode($status_filter) ?>&member_type=<?= urlencode($member_type_filter) ?>" 
+    <a href="?year=<?= $year ?>&tab=fees&search=<?= urlencode($search) ?>&status=<?= urlencode($status_filter) ?>&member_type=<?= urlencode($member_type_filter) ?>&category_id=<?= urlencode($category_filter) ?>" 
        class="tab-button" style="padding: 0.75rem 1.5rem; border-bottom: 3px solid transparent; text-decoration: none; font-weight: 600; color: #666; <?= $tab === 'fees' ? 'border-bottom-color: #2196f3; color: #2196f3;' : '' ?>">
         <i class="fas fa-file-invoice-dollar"></i> Mitgliedsbeiträge
     </a>
-    <a href="?year=<?= $year ?>&tab=items&search=<?= urlencode($search) ?>&status=<?= urlencode($status_filter) ?>&member_type=<?= urlencode($member_type_filter) ?>" 
+    <a href="?year=<?= $year ?>&tab=items&search=<?= urlencode($search) ?>&status=<?= urlencode($status_filter) ?>&member_type=<?= urlencode($member_type_filter) ?>&category_id=<?= urlencode($category_filter) ?>" 
        class="tab-button" style="padding: 0.75rem 1.5rem; border-bottom: 3px solid transparent; text-decoration: none; font-weight: 600; color: #666; <?= $tab === 'items' ? 'border-bottom-color: #2196f3; color: #2196f3;' : '' ?>">
-        <i class="fas fa-boxes"></i> Artikel & Erstattungen
+        <i class="fas fa-boxes"></i> Forderungen & Erstattungen
     </a>
 </div>
 
 <!-- Outstanding Obligations Table -->
 <div class="card">
     <div class="card-header">
-        <h2><?= $tab === 'fees' ? 'Offene Mitgliedsbeiträge' : 'Artikel-Forderungen & Erstattungsanträge' ?></h2>
+        <h2><?= $tab === 'fees' ? 'Offene Mitgliedsbeiträge' : 'Allgemeine Forderungen & Erstattungsanträge' ?></h2>
     </div>
     <div class="card-body">
         <?php if ($tab === 'fees'): ?>
@@ -405,6 +508,7 @@ if ($search !== '') {
                             <th>Sollbetrag</th>
                             <th>Gezahlt</th>
                             <th>Offen</th>
+                            <th>Kategorie</th>
                             <th>Status</th>
                             <th>Fälligkeitsdatum</th>
                             <th>Aktionen</th>
@@ -431,6 +535,28 @@ if ($search !== '') {
                                 <td><?= number_format($obl['paid_amount'], 2, ',', '.') ?> €</td>
                                 <td class="text-danger">
                                     <strong><?= number_format($obl['outstanding'], 2, ',', '.') ?> €</strong>
+                                </td>
+                                <td>
+                                    <?php if (!empty($obl['category_name'])): ?>
+                                        <span class="badge" style="background: <?= htmlspecialchars($obl['category_color'] ?: '#607d8b') ?>; color: #fff;"><?= htmlspecialchars($obl['category_name']) ?></span>
+                                    <?php else: ?>
+                                        <span style="color: #777; font-size: 0.9rem;">Ohne Kategorie</span>
+                                    <?php endif; ?>
+                                    <form method="POST" style="margin-top: 0.4rem; display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;">
+                                        <input type="hidden" name="action" value="update_obligation_category">
+                                        <input type="hidden" name="obligation_type" value="fee">
+                                        <input type="hidden" name="obligation_id" value="<?= (int)$obl['id'] ?>">
+                                        <input type="hidden" name="target_tab" value="fees">
+                                        <select name="category_id" style="min-width: 150px; padding: 0.3rem 0.45rem; border: 1px solid #ddd; border-radius: 4px;">
+                                            <option value="">Ohne Kategorie</option>
+                                            <?php foreach ($categories as $cat): ?>
+                                                <option value="<?= (int)$cat['id'] ?>" <?= ((int)($obl['category_id'] ?? 0) === (int)$cat['id']) ? 'selected' : '' ?>>
+                                                    <?= htmlspecialchars($cat['name'] . (!empty($cat['active']) ? '' : ' (inaktiv)')) ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <button type="submit" class="btn btn-sm btn-secondary">Speichern</button>
+                                    </form>
                                 </td>
                                 <td>
                                     <?php if ($obl['status'] === 'partial'): ?>
@@ -483,8 +609,8 @@ if ($search !== '') {
             <!-- Item Obligations Tab -->
             <?php if (empty($open_item_obligations)): ?>
                 <div class="info-box success">
-                    <p><i class="fas fa-check-circle"></i> <strong>Keine offenen Artikel-Forderungen!</strong></p>
-                    <p>Alle Artikel-Forderungen wurden bezahlt.</p>
+                    <p><i class="fas fa-check-circle"></i> <strong>Keine offenen Forderungen!</strong></p>
+                    <p>Alle allgemeinen Forderungen wurden bezahlt oder es liegen aktuell nur Erstattungen vor.</p>
                 </div>
             <?php else: ?>
                 <table class="data-table">
@@ -492,6 +618,7 @@ if ($search !== '') {
                         <tr>
                             <th>Empfänger</th>
                             <th>Typ</th>
+                            <th>Kategorie</th>
                             <th>Organisierendes Mitglied</th>
                             <th>Gesamtbetrag</th>
                             <th>Gezahlt</th>
@@ -519,8 +646,16 @@ if ($search !== '') {
                                     <?php if ($is_expense_request): ?>
                                         <br><small style="color: #666;">Referenz: <?= htmlspecialchars($obl['transfer_reference']) ?></small>
                                         <br><small style="color: #666;"><?= (int) ($obl['document_count'] ?? 0) ?> Beleg<?= ((int) ($obl['document_count'] ?? 0) === 1) ? '' : 'e' ?></small>
-                                    <?php elseif (!$is_member && $obl['receiver_phone']): ?>
-                                        <br><small style="color: #666;"><?= htmlspecialchars($obl['receiver_phone']) ?></small>
+                                    <?php else: ?>
+                                        <?php if (!empty($obl['notes'])): ?>
+                                            <br><small style="color: #666;"><?= htmlspecialchars(mb_strimwidth($obl['notes'], 0, 90, '…')) ?></small>
+                                        <?php endif; ?>
+                                        <?php if (!empty($obl['obligation_document_count'])): ?>
+                                            <br><small style="color: #666;"><?= (int) $obl['obligation_document_count'] ?> Dokument<?= ((int) $obl['obligation_document_count'] === 1) ? '' : 'e' ?></small>
+                                        <?php endif; ?>
+                                        <?php if (!$is_member && $obl['receiver_phone']): ?>
+                                            <br><small style="color: #666;"><?= htmlspecialchars($obl['receiver_phone']) ?></small>
+                                        <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -528,11 +663,33 @@ if ($search !== '') {
                                         <span class="badge" style="background: #ede7f6; color: #5e35b1;">Erstattung</span>
                                         <br>
                                         <span class="badge <?= $is_member ? 'badge-primary' : 'badge-secondary' ?>" style="margin-top: 0.25rem;"><?= $is_member ? 'Mitglied' : 'Extern' ?></span>
-                                    <?php elseif ($is_member): ?>
-                                        <span class="badge badge-primary">Mitglied</span>
                                     <?php else: ?>
-                                        <span class="badge badge-secondary">Extern</span>
+                                        <span class="badge" style="background: #e3f2fd; color: #1565c0;">Forderung</span>
+                                        <br>
+                                        <span class="badge <?= $is_member ? 'badge-primary' : 'badge-secondary' ?>" style="margin-top: 0.25rem;"><?= $is_member ? 'Mitglied' : 'Extern' ?></span>
                                     <?php endif; ?>
+                                </td>
+                                <td>
+                                    <?php if (!empty($obl['category_name'])): ?>
+                                        <span class="badge" style="background: <?= htmlspecialchars($obl['category_color'] ?: '#607d8b') ?>; color: #fff;"><?= htmlspecialchars($obl['category_name']) ?></span>
+                                    <?php else: ?>
+                                        <span style="color: #777; font-size: 0.9rem;">Ohne Kategorie</span>
+                                    <?php endif; ?>
+                                    <form method="POST" style="margin-top: 0.4rem; display: flex; gap: 0.35rem; align-items: center; flex-wrap: wrap;">
+                                        <input type="hidden" name="action" value="update_obligation_category">
+                                        <input type="hidden" name="obligation_type" value="item">
+                                        <input type="hidden" name="obligation_id" value="<?= (int)$obl['id'] ?>">
+                                        <input type="hidden" name="target_tab" value="items">
+                                        <select name="category_id" style="min-width: 150px; padding: 0.3rem 0.45rem; border: 1px solid #ddd; border-radius: 4px;">
+                                            <option value="">Ohne Kategorie</option>
+                                            <?php foreach ($categories as $cat): ?>
+                                                <option value="<?= (int)$cat['id'] ?>" <?= ((int)($obl['category_id'] ?? 0) === (int)$cat['id']) ? 'selected' : '' ?>>
+                                                    <?= htmlspecialchars($cat['name'] . (!empty($cat['active']) ? '' : ' (inaktiv)')) ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <button type="submit" class="btn btn-sm btn-secondary">Speichern</button>
+                                    </form>
                                 </td>
                                 <td>
                                     <?php if ($obl['organizing_member_id']): ?>
@@ -583,9 +740,17 @@ if ($search !== '') {
                                         <i class="fas fa-eye"></i>
                                     </a>
                                     <?php if ($is_expense_request && in_array($request_status, ['submitted', 'approved'], true)): ?>
-                                        <form method="POST" style="display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.5rem; min-width: 180px;">
+                                        <form method="POST" style="display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.5rem; min-width: 220px;">
                                             <input type="hidden" name="action" value="review_expense_request">
                                             <input type="hidden" name="request_id" value="<?= (int) $obl['expense_request_id'] ?>">
+                                            <select name="category_id" style="width: 100%; padding: 0.35rem 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                                                <option value="">Kategorie wählen</option>
+                                                <?php foreach ($categories as $cat): ?>
+                                                    <option value="<?= (int) $cat['id'] ?>" <?= ((int) ($obl['category_id'] ?? 0) === (int) $cat['id']) ? 'selected' : '' ?>>
+                                                        <?= htmlspecialchars($cat['name'] . (!empty($cat['active']) ? '' : ' (inaktiv)')) ?>
+                                                    </option>
+                                                <?php endforeach; ?>
+                                            </select>
                                             <input type="text" name="accountant_notes" value="<?= htmlspecialchars($obl['accountant_notes'] ?? '') ?>" placeholder="Notiz optional" style="width: 100%; padding: 0.35rem 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
                                             <div style="display: flex; flex-wrap: wrap; gap: 0.35rem;">
                                                 <?php if ($request_status === 'submitted'): ?>

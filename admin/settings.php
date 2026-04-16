@@ -173,10 +173,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
             $success = "Kategorie hinzugefügt";
         } elseif ($action === 'delete') {
-            $id = $_POST['id'];
-            $stmt = $db->prepare("DELETE FROM transaction_categories WHERE id = :id");
-            $stmt->execute(['id' => $id]);
-            $success = "Kategorie gelöscht";
+            $id = (int)$_POST['id'];
+
+            $stmt = $db->prepare("SELECT 
+                                    (SELECT COUNT(*) FROM transactions WHERE category_id = :id1) +
+                                    (SELECT COUNT(*) FROM member_fee_obligations WHERE category_id = :id2) +
+                                    (SELECT COUNT(*) FROM item_obligations WHERE category_id = :id3) AS total_usage");
+            $stmt->execute([
+                'id1' => $id,
+                'id2' => $id,
+                'id3' => $id
+            ]);
+            $total_usage = (int)$stmt->fetchColumn();
+
+            if ($total_usage > 0) {
+                $error = "Kategorie kann nicht gelöscht werden, weil sie bereits in bestehenden Buchungen oder Verpflichtungen verwendet wird. Bitte zuerst die Zuordnung ändern.";
+            } else {
+                $stmt = $db->prepare("DELETE FROM transaction_categories WHERE id = :id");
+                $stmt->execute(['id' => $id]);
+                $success = "Kategorie gelöscht";
+            }
         }
     } elseif ($section === 'email') {
         $action = $_POST['action'] ?? 'save';
@@ -400,8 +416,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $stmt = $db->query("SELECT * FROM social_media ORDER BY sort_order");
 $social_links = $stmt->fetchAll();
 
-// Get transaction categories
-$stmt = $db->query("SELECT * FROM transaction_categories ORDER BY sort_order");
+// Get transaction categories with usage statistics
+$stmt = $db->query("SELECT tc.*,
+                           (SELECT COUNT(*) FROM transactions t WHERE t.category_id = tc.id) AS tx_usage,
+                           (SELECT COUNT(*) FROM member_fee_obligations mfo WHERE mfo.category_id = tc.id) AS fee_usage,
+                           (SELECT COUNT(*) FROM item_obligations io WHERE io.category_id = tc.id) AS item_usage,
+                           ((SELECT COUNT(*) FROM transactions t WHERE t.category_id = tc.id) +
+                            (SELECT COUNT(*) FROM member_fee_obligations mfo WHERE mfo.category_id = tc.id) +
+                            (SELECT COUNT(*) FROM item_obligations io WHERE io.category_id = tc.id)) AS total_usage
+                    FROM transaction_categories tc
+                    ORDER BY tc.sort_order, tc.name");
 $categories = $stmt->fetchAll();
 
 // Get users
@@ -660,7 +684,12 @@ function deleteSocialMedia(id) {
     }
 }
 
-function deleteCategory(id) {
+function deleteCategory(id, usageCount = 0) {
+    if (Number(usageCount) > 0) {
+        alert('Diese Kategorie wird bereits verwendet und kann erst gelöscht werden, nachdem die bestehenden Zuordnungen umgestellt wurden.');
+        return;
+    }
+
     if (confirm('Diese Kategorie wirklich löschen?')) {
         const form = document.createElement('form');
         form.method = 'POST';
@@ -1181,6 +1210,9 @@ document.addEventListener('DOMContentLoaded', () => {
 <!-- Categories Tab -->
 <div id="categories-tab" class="tab-content">
     <h2>Transaktionskategorien verwalten</h2>
+    <div class="alert" style="background: #eef6ff; color: #0b4f7d; border-left: 4px solid #1976d2; margin-bottom: 1rem;">
+        Namensänderungen sind für bestehende Daten unkritisch. Bereits verwendete Kategorien können jedoch nicht gelöscht werden, bis die vorhandenen Verpflichtungen oder Buchungen neu zugeordnet wurden.
+    </div>
     
     <div class="table-responsive">
         <table class="data-table">
@@ -1191,6 +1223,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <th>Name</th>
                     <th>Beschreibung</th>
                     <th>Icon</th>
+                    <th>Verwendung</th>
                     <th>Status</th>
                     <th>Aktionen</th>
                 </tr>
@@ -1209,10 +1242,22 @@ document.addEventListener('DOMContentLoaded', () => {
                             <td><input type="text" name="name" value="<?php echo htmlspecialchars($category['name']); ?>"></td>
                             <td><input type="text" name="description" value="<?php echo htmlspecialchars($category['description']); ?>"></td>
                             <td><input type="text" name="icon" value="<?php echo htmlspecialchars($category['icon']); ?>" placeholder="fas fa-..."></td>
+                            <td>
+                                <?php if ((int)($category['total_usage'] ?? 0) > 0): ?>
+                                    <span class="badge badge-warning">in Nutzung</span>
+                                    <div style="font-size: 0.8rem; color: #666; margin-top: 0.25rem; line-height: 1.4;">
+                                        Buchungen: <?php echo (int)($category['tx_usage'] ?? 0); ?><br>
+                                        Beiträge: <?php echo (int)($category['fee_usage'] ?? 0); ?><br>
+                                        Forderungen: <?php echo (int)($category['item_usage'] ?? 0); ?>
+                                    </div>
+                                <?php else: ?>
+                                    <span class="badge badge-success">frei</span>
+                                <?php endif; ?>
+                            </td>
                             <td><input type="checkbox" name="active" <?php echo $category['active'] ? 'checked' : ''; ?>></td>
                             <td class="actions">
                                 <button type="submit" class="btn btn-sm btn-primary">Speichern</button>
-                                <button type="button" class="btn btn-sm btn-danger" onclick="deleteCategory(<?php echo $category['id']; ?>)">Löschen</button>
+                                <button type="button" class="btn btn-sm btn-danger" onclick="deleteCategory(<?php echo $category['id']; ?>, <?php echo (int)($category['total_usage'] ?? 0); ?>)" <?php echo ((int)($category['total_usage'] ?? 0) > 0) ? 'disabled title="Kategorie wird verwendet"' : ''; ?>>Löschen</button>
                             </td>
                         </form>
                     </tr>
