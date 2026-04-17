@@ -9,6 +9,8 @@ if (!is_logged_in() || !has_permission('outstanding_obligations.php')) {
     exit;
 }
 
+ensure_financial_reporting_support();
+
 $db = getDBConnection();
 $id = $_GET['id'] ?? null;
 
@@ -25,10 +27,13 @@ $stmt = $db->prepare("SELECT io.*,
                               m.id as member_id,
                               om.first_name as org_first_name,
                               om.last_name as org_last_name,
-                              om.id as organizing_member_id
+                              om.id as organizing_member_id,
+                              tc.name as category_name,
+                              tc.color as category_color
                       FROM item_obligations io
                       LEFT JOIN members m ON io.member_id = m.id
                       LEFT JOIN members om ON io.organizing_member_id = om.id
+                      LEFT JOIN transaction_categories tc ON io.category_id = tc.id
                       WHERE io.id = :id");
 $stmt->execute([':id' => $id]);
 $obligation = $stmt->fetch();
@@ -62,7 +67,90 @@ $stmt = $db->prepare("SELECT oi.*, i.name as item_name
 $stmt->execute([':obligation_id' => $id]);
 $items = $stmt->fetchAll();
 
-$outstanding = $obligation['total_amount'] - $obligation['paid_amount'];
+$outstanding = (float) $obligation['total_amount'] - (float) $obligation['paid_amount'];
+
+$expense_request = null;
+$expense_request_docs = [];
+$obligation_docs = [];
+$linked_transaction_docs = [];
+try {
+    ensure_item_obligation_document_support();
+    $stmt = $db->prepare("SELECT * FROM item_obligation_documents WHERE obligation_id = :id ORDER BY uploaded_at DESC");
+    $stmt->execute([':id' => $id]);
+    $obligation_docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    ensure_expense_request_support();
+    $stmt = $db->prepare("SELECT * FROM expense_requests WHERE linked_item_obligation_id = :id LIMIT 1");
+    $stmt->execute([':id' => $id]);
+    $expense_request = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    if ($expense_request) {
+        $stmt = $db->prepare("SELECT * FROM expense_request_documents WHERE expense_request_id = :id ORDER BY uploaded_at DESC");
+        $stmt->execute([':id' => $expense_request['id']]);
+        $expense_request_docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    $stmt = $db->prepare("SELECT DISTINCT td.*, t.id AS transaction_id, t.booking_date, t.amount
+                          FROM item_obligation_payments iop
+                          JOIN transactions t ON iop.transaction_id = t.id
+                          JOIN transaction_documents td ON td.transaction_id = t.id
+                          WHERE iop.obligation_id = :id1
+                          UNION
+                          SELECT DISTINCT td.*, t.id AS transaction_id, t.booking_date, t.amount
+                          FROM item_obligation_payments iop
+                          JOIN transactions t ON iop.transaction_id = t.id
+                          JOIN transaction_documents td ON td.id = t.document_id
+                          WHERE iop.obligation_id = :id2
+                          ORDER BY uploaded_at DESC");
+    $stmt->execute([':id1' => $id, ':id2' => $id]);
+    $linked_transaction_docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $expense_request = null;
+    $expense_request_docs = [];
+    $obligation_docs = [];
+    $linked_transaction_docs = [];
+}
+
+$status_badge_class = 'badge-danger';
+$status_icon = 'fas fa-exclamation-triangle';
+$status_label = 'Offen';
+
+if ($expense_request) {
+    switch ($expense_request['status']) {
+        case 'paid':
+            $status_badge_class = 'badge-success';
+            $status_icon = 'fas fa-check-circle';
+            $status_label = 'Ausgezahlt';
+            break;
+        case 'approved':
+            $status_badge_class = 'badge-primary';
+            $status_icon = 'fas fa-thumbs-up';
+            $status_label = 'Genehmigt';
+            break;
+        case 'rejected':
+            $status_badge_class = 'badge-secondary';
+            $status_icon = 'fas fa-ban';
+            $status_label = 'Abgelehnt';
+            break;
+        default:
+            $status_badge_class = 'badge-warning';
+            $status_icon = 'fas fa-clock';
+            $status_label = 'Eingereicht';
+            break;
+    }
+} elseif (($obligation['status'] ?? '') === 'cancelled') {
+    $status_badge_class = 'badge-secondary';
+    $status_icon = 'fas fa-ban';
+    $status_label = 'Storniert';
+} elseif ($outstanding <= 0) {
+    $status_badge_class = 'badge-success';
+    $status_icon = 'fas fa-check-circle';
+    $status_label = 'Bezahlt';
+} elseif ((float) $obligation['paid_amount'] > 0) {
+    $status_badge_class = 'badge-warning';
+    $status_icon = 'fas fa-clock';
+    $status_label = 'Teilzahlung';
+}
 
 include 'includes/header.php';
 ?>
@@ -73,7 +161,7 @@ include 'includes/header.php';
             <i class="fas fa-arrow-left"></i> Zurück
         </a>
         <h1 style="display: inline-block; margin-left: 1rem;">
-            Artikel-Forderung #<?= $id ?>
+            <?= $expense_request ? 'Erstattungsantrag' : 'Forderung' ?> #<?= $id ?>
         </h1>
     </div>
 </div>
@@ -126,22 +214,15 @@ include 'includes/header.php';
             <div>
                 <h3 style="margin-top: 0;">Status</h3>
                 <p style="margin: 0;">
-                    <?php 
-                    $outstanding = $obligation['total_amount'] - $obligation['paid_amount'];
-                    if ($outstanding == 0): ?>
-                        <span class="badge badge-success" style="font-size: 1rem; padding: 0.5rem 1rem;">
-                            <i class="fas fa-check-circle"></i> Bezahlt
-                        </span>
-                    <?php elseif ($obligation['paid_amount'] > 0): ?>
-                        <span class="badge badge-warning" style="font-size: 1rem; padding: 0.5rem 1rem;">
-                            <i class="fas fa-clock"></i> Teilzahlung
-                        </span>
-                    <?php else: ?>
-                        <span class="badge badge-danger" style="font-size: 1rem; padding: 0.5rem 1rem;">
-                            <i class="fas fa-exclamation-triangle"></i> Offen
-                        </span>
-                    <?php endif; ?>
+                    <span class="badge <?= htmlspecialchars($status_badge_class) ?>" style="font-size: 1rem; padding: 0.5rem 1rem;">
+                        <i class="<?= htmlspecialchars($status_icon) ?>"></i> <?= htmlspecialchars($status_label) ?>
+                    </span>
                 </p>
+                <?php if (!empty($obligation['category_name'])): ?>
+                    <p style="color: #666; margin: 0.5rem 0 0 0;">
+                        Kategorie: <span class="badge" style="background: <?= htmlspecialchars($obligation['category_color'] ?: '#78909c') ?>; color: #fff;"><?= htmlspecialchars($obligation['category_name']) ?></span>
+                    </p>
+                <?php endif; ?>
                 <?php if ($obligation['due_date']): ?>
                     <p style="color: #666; margin: 0.5rem 0 0 0;">
                         Fällig: <strong><?= date('d.m.Y', strtotime($obligation['due_date'])) ?></strong>
@@ -188,31 +269,106 @@ include 'includes/header.php';
 <!-- Items Table -->
 <div class="card" style="margin-top: 1rem;">
     <div class="card-header">
-        <h2>Artikel</h2>
+        <h2>Optional verknüpfte Artikel</h2>
     </div>
     <div class="card-body">
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Artikel</th>
-                    <th style="width: 100px;">Menge</th>
-                    <th style="width: 120px;">Preis pro Stück</th>
-                    <th style="width: 140px; text-align: right;">Summe</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($items as $item): ?>
+        <?php if (!empty($items)): ?>
+            <table class="data-table">
+                <thead>
                     <tr>
-                        <td><?= htmlspecialchars($item['item_name']) ?></td>
-                        <td><?= (int)$item['quantity'] ?></td>
-                        <td><?= number_format($item['unit_price'], 2, ',', '.') ?> €</td>
-                        <td style="text-align: right;"><?= number_format($item['subtotal'], 2, ',', '.') ?> €</td>
+                        <th>Artikel</th>
+                        <th style="width: 100px;">Menge</th>
+                        <th style="width: 120px;">Preis pro Stück</th>
+                        <th style="width: 140px; text-align: right;">Summe</th>
                     </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    <?php foreach ($items as $item): ?>
+                        <tr>
+                            <td><?= htmlspecialchars($item['item_name']) ?></td>
+                            <td><?= (int)$item['quantity'] ?></td>
+                            <td><?= number_format($item['unit_price'], 2, ',', '.') ?> €</td>
+                            <td style="text-align: right;"><?= number_format($item['subtotal'], 2, ',', '.') ?> €</td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php else: ?>
+            <p style="margin: 0; color: #666;">Für diese Forderung wurden keine Artikel verknüpft.</p>
+        <?php endif; ?>
     </div>
 </div>
+
+<?php if (!empty($obligation_docs)): ?>
+    <div class="card" style="margin-top: 1rem;">
+        <div class="card-header">
+            <h2>Verknüpfte Forderungsdokumente</h2>
+        </div>
+        <div class="card-body">
+            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                <?php foreach ($obligation_docs as $doc): ?>
+                    <a href="../uploads/<?= htmlspecialchars($doc['file_path']) ?>" target="_blank" class="btn btn-sm btn-secondary">
+                        <i class="fas fa-file"></i> <?= htmlspecialchars($doc['file_name']) ?>
+                    </a>
+                <?php endforeach; ?>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
+
+<?php if ($expense_request): ?>    <div class="card" style="margin-top: 1rem;">
+        <div class="card-header">
+            <h2>Erstattungsdetails</h2>
+        </div>
+        <div class="card-body">
+            <p><strong>Referenz:</strong> <?= htmlspecialchars($expense_request['transfer_reference']) ?></p>
+            <p><strong>Status:</strong>
+                <?php if ($expense_request['status'] === 'paid'): ?>
+                    <span class="badge badge-success">Ausgezahlt</span>
+                <?php elseif ($expense_request['status'] === 'approved'): ?>
+                    <span class="badge badge-primary">Genehmigt</span>
+                <?php elseif ($expense_request['status'] === 'rejected'): ?>
+                    <span class="badge badge-secondary">Abgelehnt</span>
+                <?php else: ?>
+                    <span class="badge badge-warning">Eingereicht</span>
+                <?php endif; ?>
+            </p>
+            <p><strong>Kontext:</strong><br><?= nl2br(htmlspecialchars($expense_request['expense_context'])) ?></p>
+            <?php if (!empty($expense_request['accountant_notes'])): ?>
+                <p><strong>Notiz Buchhaltung:</strong><br><?= nl2br(htmlspecialchars($expense_request['accountant_notes'])) ?></p>
+            <?php endif; ?>
+            <?php if (!empty($expense_request_docs)): ?>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem;">
+                    <?php foreach ($expense_request_docs as $doc): ?>
+                        <a href="../uploads/<?= htmlspecialchars($doc['file_path']) ?>" target="_blank" class="btn btn-sm btn-secondary">
+                            <i class="fas fa-file"></i> <?= htmlspecialchars($doc['file_name']) ?>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+<?php endif; ?>
+
+<?php if (!empty($linked_transaction_docs)): ?>
+    <div class="card" style="margin-top: 1rem;">
+        <div class="card-header">
+            <h2>Verknüpfte Buchungsbelege</h2>
+        </div>
+        <div class="card-body">
+            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;">
+                <?php foreach ($linked_transaction_docs as $doc): ?>
+                    <a href="../uploads/<?= htmlspecialchars($doc['file_path']) ?>" target="_blank" class="btn btn-sm btn-secondary">
+                        <i class="fas fa-file"></i> <?= htmlspecialchars($doc['file_name']) ?>
+                    </a>
+                <?php endforeach; ?>
+            </div>
+            <p style="color: #666; margin: 0;">
+                Die Belege stammen aus den bereits verknüpften historischen Buchungen.
+            </p>
+        </div>
+    </div>
+<?php endif; ?>
 
 <!-- Notes -->
 <?php if ($obligation['notes']): ?>

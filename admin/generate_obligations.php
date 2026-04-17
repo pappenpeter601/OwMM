@@ -9,6 +9,8 @@ if (!is_logged_in() || !has_permission('generate_obligations.php')) {
     exit;
 }
 
+ensure_financial_reporting_support();
+
 $db = getDBConnection();
 $message = '';
 $error = '';

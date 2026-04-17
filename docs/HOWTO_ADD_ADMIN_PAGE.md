@@ -245,6 +245,23 @@ Before considering your page complete, test the following:
 
 ---
 
+## Feature-Specific Example
+
+For the new reimbursement flow **Belege Einreichen**, see the dedicated implementation guide:
+
+- [BELEGE_EINREICHEN_IMPLEMENTATION_GUIDE.md](BELEGE_EINREICHEN_IMPLEMENTATION_GUIDE.md)
+
+This guide explains how to integrate:
+- dashboard and sidebar entry
+- new permission
+- upload of PDF/JPG/PNG receipts
+- creation of a linked outgoing obligation
+- accountant notification email
+- auto-linking in accounting by transfer reference
+- visibility in the transaction checking workflow
+
+---
+
 ## Common Pitfalls to Avoid
 
 1. **Forgetting the permission check** - Always add `has_permission()` check at the top of your PHP file

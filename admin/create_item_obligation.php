@@ -9,72 +9,79 @@ if (!is_logged_in() || !has_permission('outstanding_obligations.php')) {
     exit;
 }
 
+ensure_financial_reporting_support();
+
 $db = getDBConnection();
 $message = '';
 $error = '';
 
 // Handle form submission for creating obligation
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'create_obligation') {
+    $uploadedFsPaths = [];
     try {
         $receiver_type = $_POST['receiver_type']; // 'member' or 'non-member'
         $member_id = ($receiver_type === 'member') ? $_POST['member_id'] : null;
-        $receiver_name = ($receiver_type === 'non-member') ? $_POST['receiver_name'] : null;
+        $receiver_name = ($receiver_type === 'non-member') ? trim((string) ($_POST['receiver_name'] ?? '')) : null;
         $receiver_phone = $_POST['receiver_phone'] ?? null;
         $receiver_email = $_POST['receiver_email'] ?? null;
         $organizing_member_id = $_POST['organizing_member_id'] ?? null;
+        $category_id = !empty($_POST['category_id']) ? (int) $_POST['category_id'] : null;
         $due_date = $_POST['due_date'] ?? null;
-        $notes = $_POST['notes'] ?? null;
+        $notes = trim((string) ($_POST['notes'] ?? ''));
+        $manual_amount = (float) str_replace(',', '.', (string) ($_POST['manual_amount'] ?? '0'));
         
         // Validate
         if ($receiver_type === 'member' && !$member_id) {
             throw new Exception('Bitte wählen Sie ein Mitglied aus.');
         }
         if ($receiver_type === 'non-member' && !$receiver_name) {
-            throw new Exception('Bitte geben Sie den Namen des Empfängers ein.');
-        }
-        if (empty($_POST['items']) || !is_array($_POST['items'])) {
-            throw new Exception('Mindestens ein Artikel muss ausgewählt werden.');
+            throw new Exception('Bitte geben Sie den Namen der Person oder Organisation ein.');
         }
         
         // Start transaction
         $db->beginTransaction();
         
-        // Calculate total amount and validate items
+        // Calculate total amount from optionally linked items
         $total_amount = 0;
         $obligation_items = [];
         
-        foreach ($_POST['items'] as $item_id => $qty) {
-            $qty = (int)$qty;
-            if ($qty <= 0) continue;
-            
-            // Get item details
-            $stmt = $db->prepare("SELECT id, name, price FROM items WHERE id = :id AND active = 1");
-            $stmt->execute([':id' => $item_id]);
-            $item = $stmt->fetch();
-            
-            if (!$item) {
-                throw new Exception("Artikel mit ID $item_id nicht gefunden oder inaktiv.");
+        if (!empty($_POST['items']) && is_array($_POST['items'])) {
+            foreach ($_POST['items'] as $item_id => $qty) {
+                $qty = (int)$qty;
+                if ($qty <= 0) continue;
+                
+                $stmt = $db->prepare("SELECT id, name, price FROM items WHERE id = :id AND active = 1");
+                $stmt->execute([':id' => $item_id]);
+                $item = $stmt->fetch();
+                
+                if (!$item) {
+                    throw new Exception("Artikel mit ID $item_id nicht gefunden oder inaktiv.");
+                }
+                
+                $subtotal = $qty * $item['price'];
+                $total_amount += $subtotal;
+                $obligation_items[$item_id] = [
+                    'name' => $item['name'],
+                    'quantity' => $qty,
+                    'unit_price' => $item['price'],
+                    'subtotal' => $subtotal
+                ];
             }
-            
-            $subtotal = $qty * $item['price'];
-            $total_amount += $subtotal;
-            $obligation_items[$item_id] = [
-                'name' => $item['name'],
-                'quantity' => $qty,
-                'unit_price' => $item['price'],
-                'subtotal' => $subtotal
-            ];
         }
         
         if ($total_amount <= 0) {
-            throw new Exception('Gesamtbetrag muss größer als 0 sein.');
+            $total_amount = $manual_amount;
+        }
+
+        if ($total_amount <= 0) {
+            throw new Exception('Bitte geben Sie einen Betrag an oder wählen Sie mindestens einen optionalen Artikel aus.');
         }
         
         // Create obligation
         $stmt = $db->prepare("INSERT INTO item_obligations 
-                              (member_id, receiver_name, receiver_phone, receiver_email, organizing_member_id, 
+                              (member_id, receiver_name, receiver_phone, receiver_email, organizing_member_id, category_id,
                                total_amount, status, notes, due_date, created_by)
-                              VALUES (:member_id, :receiver_name, :receiver_phone, :receiver_email, :organizing_member_id, 
+                              VALUES (:member_id, :receiver_name, :receiver_phone, :receiver_email, :organizing_member_id, :category_id,
                                       :total_amount, 'open', :notes, :due_date, :created_by)");
         $stmt->execute([
             ':member_id' => $member_id,
@@ -82,6 +89,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ':receiver_phone' => $receiver_phone,
             ':receiver_email' => $receiver_email,
             ':organizing_member_id' => $organizing_member_id ?: null,
+            ':category_id' => $category_id,
             ':total_amount' => $total_amount,
             ':notes' => $notes,
             ':due_date' => $due_date ?: null,
@@ -102,12 +110,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ':subtotal' => $item_data['subtotal']
             ]);
         }
+
+        $documents = normalize_uploaded_files_array($_FILES['documents'] ?? []);
+        foreach ($documents as $document) {
+            if (($document['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE || empty($document['name'])) {
+                continue;
+            }
+            if (($document['error'] ?? UPLOAD_ERR_OK) !== UPLOAD_ERR_OK) {
+                throw new Exception('Ein Dokument konnte nicht hochgeladen werden.');
+            }
+
+            $uploadResult = upload_item_obligation_document($document, (int) $obligation_id, $db);
+            if (empty($uploadResult['success'])) {
+                throw new Exception($uploadResult['error'] ?? 'Dokument konnte nicht verknüpft werden.');
+            }
+            if (!empty($uploadResult['fs_path'])) {
+                $uploadedFsPaths[] = $uploadResult['fs_path'];
+            }
+        }
         
         $db->commit();
-        $message = 'Forderung erfolgreich erstellt.';
+        $message = 'Forderung erfolgreich erstellt. <a href="view_item_obligation.php?id=' . (int) $obligation_id . '">Details öffnen</a>';
         
     } catch (Exception $e) {
-        $db->rollBack();
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+        foreach ($uploadedFsPaths as $fsPath) {
+            if ($fsPath && file_exists($fsPath)) {
+                @unlink($fsPath);
+            }
+        }
         $error = 'Fehler beim Erstellen der Forderung: ' . $e->getMessage();
     }
 }
@@ -122,6 +155,9 @@ $stmt = $db->prepare("SELECT id, name, price FROM items WHERE active = 1 ORDER B
 $stmt->execute();
 $items = $stmt->fetchAll();
 
+$stmt = $db->query("SELECT id, name FROM transaction_categories WHERE active = 1 ORDER BY sort_order, name");
+$categories = $stmt->fetchAll();
+
 include 'includes/header.php';
 ?>
 
@@ -130,7 +166,7 @@ include 'includes/header.php';
         <a href="outstanding_obligations.php" class="btn btn-secondary">
             <i class="fas fa-arrow-left"></i> Zu Forderungen
         </a>
-        <h1 style="display: inline-block; margin-left: 1rem;">Neue Artikel-Forderung</h1>
+        <h1 style="display: inline-block; margin-left: 1rem;">Neue Forderung</h1>
     </div>
 </div>
 
@@ -142,7 +178,7 @@ include 'includes/header.php';
     <div class="alert alert-danger"><?= $error ?></div>
 <?php endif; ?>
 
-<form method="POST" class="form-card">
+<form method="POST" enctype="multipart/form-data" class="form-card">
     <input type="hidden" name="action" value="create_obligation">
     
     <div class="form-grid">
@@ -207,15 +243,39 @@ include 'includes/header.php';
             <label for="due_date">Zahlungsfrist</label>
             <input type="date" id="due_date" name="due_date">
         </div>
+
+        <div class="form-group">
+            <label for="manual_amount">Betrag der Forderung *</label>
+            <input type="text" id="manual_amount" name="manual_amount" inputmode="decimal" placeholder="0,00" oninput="normalizeGermanAmountInput(this); updateTotalSum()">
+            <small>Bitte im Format 12,34 eingeben. Wird verwendet, wenn keine Artikel ausgewählt werden.</small>
+        </div>
+
+        <div class="form-group">
+            <label for="category_id">Kategorie</label>
+            <select id="category_id" name="category_id">
+                <option value="">-- Optional wählen --</option>
+                <?php foreach ($categories as $category): ?>
+                    <option value="<?= (int) $category['id'] ?>"><?= htmlspecialchars($category['name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
         
         <div class="form-group" style="grid-column: 1 / -1;">
-            <label for="notes">Notizen</label>
-            <textarea id="notes" name="notes" rows="3"></textarea>
+            <label for="notes">Beschreibung / Notizen</label>
+            <textarea id="notes" name="notes" rows="3" placeholder="z. B. Teilnahmebeitrag, Materialkosten oder sonstige Forderung"></textarea>
+        </div>
+
+        <div class="form-group" style="grid-column: 1 / -1;">
+            <label for="documents">Dokumente / Belege optional</label>
+            <input type="file" id="documents" name="documents[]" class="form-control" accept="image/*,application/pdf" multiple>
+            <small>Optional für positive Forderungen. Erlaubt sind PDF, JPG, PNG und WEBP bis 5MB pro Datei.</small>
+            <div id="file-preview" class="file-preview" style="margin-top: 0.75rem;"></div>
         </div>
         
         <!-- Items Selection -->
         <div style="grid-column: 1 / -1;">
-            <h3 style="margin-top: 2rem; margin-bottom: 1rem;">Artikel</h3>
+            <h3 style="margin-top: 2rem; margin-bottom: 0.35rem;">Optionale Artikelverknüpfung</h3>
+            <p style="margin: 0 0 1rem 0; color: #666;">Wenn passende Artikel existieren, können Sie diese zusätzlich verknüpfen. Andernfalls wird nur die allgemeine Forderung angelegt.</p>
         </div>
         
         <div class="table-responsive" style="grid-column: 1 / -1;">
@@ -260,7 +320,7 @@ include 'includes/header.php';
         <!-- Submit -->
         <div class="form-actions" style="grid-column: 1 / -1; margin-top: 2rem;">
             <button type="submit" class="btn btn-primary">
-                <i class="fas fa-check"></i> Forderung erstellen
+                <i class="fas fa-check"></i> Allgemeine Forderung erstellen
             </button>
             <a href="outstanding_obligations.php" class="btn btn-secondary">Abbrechen</a>
         </div>
@@ -268,6 +328,33 @@ include 'includes/header.php';
 </form>
 
 <script>
+function normalizeGermanAmountInput(input) {
+    if (!input) return;
+    let value = String(input.value || '');
+    value = value.replace(/\./g, ',');
+    value = value.replace(/[^0-9,]/g, '');
+
+    const firstComma = value.indexOf(',');
+    if (firstComma !== -1) {
+        const before = value.slice(0, firstComma + 1);
+        const after = value.slice(firstComma + 1).replace(/,/g, '').slice(0, 2);
+        value = before + after;
+    }
+
+    input.value = value;
+}
+
+function parseGermanAmount(value) {
+    return parseFloat(String(value || '0').replace(/\./g, '').replace(',', '.')) || 0;
+}
+
+function formatGermanCurrency(value) {
+    return Number(value || 0).toLocaleString('de-DE', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    }) + ' €';
+}
+
 function toggleReceiverType() {
     const memberType = document.querySelector('input[name="receiver_type"]:checked').value;
     const memberSection = document.getElementById('member-receiver');
@@ -307,10 +394,7 @@ function updateRowSum(input) {
     const qty = parseInt(input.value) || 0;
     const sum = price * qty;
     
-    row.querySelector('.item-sum').textContent = sum.toLocaleString('de-DE', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-    }) + ' €';
+    row.querySelector('.item-sum').textContent = formatGermanCurrency(sum);
     
     updateTotalSum();
 }
@@ -325,12 +409,43 @@ function updateTotalSum() {
             total += price * qty;
         }
     });
+
+    const manualInput = document.getElementById('manual_amount');
+    const manualAmount = parseGermanAmount(manualInput?.value || '0');
+    const effectiveTotal = total > 0 ? total : manualAmount;
     
-    document.getElementById('total-sum').textContent = total.toLocaleString('de-DE', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-    }) + ' €';
+    document.getElementById('total-sum').textContent = formatGermanCurrency(effectiveTotal);
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+    const manualInput = document.getElementById('manual_amount');
+    if (manualInput) {
+        manualInput.addEventListener('blur', function() {
+            const parsed = parseGermanAmount(this.value);
+            this.value = parsed > 0 ? parsed.toLocaleString('de-DE', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            }) : '';
+            updateTotalSum();
+        });
+    }
+
+    const fileInput = document.getElementById('documents');
+    const preview = document.getElementById('file-preview');
+    if (fileInput && preview) {
+        fileInput.addEventListener('change', function() {
+            preview.innerHTML = '';
+            Array.from(this.files || []).forEach(function(file) {
+                const item = document.createElement('div');
+                item.className = 'file-preview-item';
+                item.textContent = file.name + ' (' + Math.round(file.size / 1024) + ' KB)';
+                preview.appendChild(item);
+            });
+        });
+    }
+
+    updateTotalSum();
+});
 </script>
 
 <?php include 'includes/footer.php'; ?>

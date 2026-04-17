@@ -163,8 +163,12 @@ class SMTPClient {
     }
     
     private function processEmailBody($body) {
-        if (!mb_check_encoding($body, 'UTF-8')) {
-            $body = mb_convert_encoding($body, 'UTF-8', 'auto');
+        $body = (string) $body;
+
+        if (function_exists('mb_check_encoding') && function_exists('mb_convert_encoding')) {
+            if (!mb_check_encoding($body, 'UTF-8')) {
+                $body = mb_convert_encoding($body, 'UTF-8', 'auto');
+            }
         }
         
         $lines = explode("\n", $body);

@@ -507,6 +507,7 @@ CREATE TABLE IF NOT EXISTS `membership_fees` (
 CREATE TABLE IF NOT EXISTS `member_fee_obligations` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `member_id` int(11) NOT NULL,
+  `category_id` int(11) DEFAULT NULL COMMENT 'Financial category for reporting',
   `fee_year` int(4) NOT NULL COMMENT 'Year this fee is for',
   `fee_amount` decimal(10,2) NOT NULL COMMENT 'Required amount based on membership_fees',
   `paid_amount` decimal(10,2) NOT NULL DEFAULT 0.00 COMMENT 'Amount paid so far',
@@ -520,10 +521,12 @@ CREATE TABLE IF NOT EXISTS `member_fee_obligations` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `member_year` (`member_id`, `fee_year`),
   KEY `fee_year` (`fee_year`),
+  KEY `category_id` (`category_id`),
   KEY `status` (`status`),
   KEY `created_by` (`created_by`),
   CONSTRAINT `member_fee_obligations_ibfk_1` FOREIGN KEY (`member_id`) REFERENCES `members` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `member_fee_obligations_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+  CONSTRAINT `member_fee_obligations_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `member_fee_obligations_ibfk_3` FOREIGN KEY (`category_id`) REFERENCES `transaction_categories` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Member payments (reduces obligations)
@@ -654,8 +657,10 @@ INSERT INTO `permissions` (`name`, `display_name`, `description`, `category`) VA
 ('items.php', 'Artikel', 'Artikel verwalten', 'Basic'),
 ('outstanding_obligations.php', 'Offene Forderungen', 'Offene Forderungen verwalten', 'Finanzen'),
 ('payment_reminders.php', 'Zahlungserinnerungen', 'Zahlungserinnerungen versenden und Historie einsehen', 'Finanzen'),
+('financial_report.php', 'Finanzbericht', 'Finanzberichte, Kennzahlen und Auswertungen anzeigen', 'Finanzen'),
+('expense_requests.php', 'Belege Einreichen', 'Auslagen und Erstattungsanträge einreichen und verwalten', 'Finanzen'),
 ('selfservice.php', 'Self-Service', 'Zugriff auf Organisationsdaten', 'Basic'),
-('calendar.php', 'Kalender', 'Gemeinsamen Kalender verwalten', 'Basic')
+('calendar.php', 'Kalender', 'Gemeinsamen Kalender verwalten', 'Basic'),
 ('dashboard.php','Dashboard','Dashboard','Basic');
 
 -- Grant admin user all permissions (assuming user id=1 is admin)
@@ -684,6 +689,7 @@ CREATE TABLE IF NOT EXISTS `item_obligations` (
   `receiver_phone` varchar(20) DEFAULT NULL,
   `receiver_email` varchar(100) DEFAULT NULL,
   `organizing_member_id` int(11) DEFAULT NULL COMMENT 'Member who organized/brokered the deal',
+  `category_id` int(11) DEFAULT NULL COMMENT 'Financial category for reporting',
   `total_amount` decimal(10,2) NOT NULL,
   `paid_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
   `status` enum('open','paid','cancelled') NOT NULL DEFAULT 'open',
@@ -695,12 +701,14 @@ CREATE TABLE IF NOT EXISTS `item_obligations` (
   PRIMARY KEY (`id`),
   KEY `member_id` (`member_id`),
   KEY `organizing_member_id` (`organizing_member_id`),
+  KEY `category_id` (`category_id`),
   KEY `status` (`status`),
   KEY `created_at` (`created_at`),
   KEY `created_by` (`created_by`),
   CONSTRAINT `item_obligations_ibfk_1` FOREIGN KEY (`member_id`) REFERENCES `members` (`id`) ON DELETE CASCADE,
   CONSTRAINT `item_obligations_ibfk_2` FOREIGN KEY (`organizing_member_id`) REFERENCES `members` (`id`) ON DELETE SET NULL,
-  CONSTRAINT `item_obligations_ibfk_3` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+  CONSTRAINT `item_obligations_ibfk_3` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `item_obligations_ibfk_4` FOREIGN KEY (`category_id`) REFERENCES `transaction_categories` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Line items within an obligation (which items are included and quantities)
@@ -717,6 +725,77 @@ CREATE TABLE IF NOT EXISTS `obligation_items` (
   KEY `item_id` (`item_id`),
   CONSTRAINT `obligation_items_ibfk_1` FOREIGN KEY (`obligation_id`) REFERENCES `item_obligations` (`id`) ON DELETE CASCADE,
   CONSTRAINT `obligation_items_ibfk_2` FOREIGN KEY (`item_id`) REFERENCES `items` (`id`) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Documents directly linked to positive obligations
+CREATE TABLE IF NOT EXISTS `item_obligation_documents` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `obligation_id` int(11) NOT NULL,
+  `file_name` varchar(255) NOT NULL,
+  `file_path` varchar(255) NOT NULL,
+  `file_size` int(11) DEFAULT NULL,
+  `uploaded_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `uploaded_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `obligation_id` (`obligation_id`),
+  KEY `uploaded_by` (`uploaded_by`),
+  CONSTRAINT `item_obligation_documents_ibfk_1` FOREIGN KEY (`obligation_id`) REFERENCES `item_obligations` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `item_obligation_documents_ibfk_2` FOREIGN KEY (`uploaded_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Expense reimbursement requests / Belege einreichen
+CREATE TABLE IF NOT EXISTS `expense_requests` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `member_id` int(11) DEFAULT NULL,
+  `submitted_by_user_id` int(11) DEFAULT NULL,
+  `full_name_snapshot` varchar(150) NOT NULL,
+  `iban` varchar(34) DEFAULT NULL,
+  `transfer_reference` varchar(80) NOT NULL,
+  `expense_context` text NOT NULL,
+  `requested_amount_total` decimal(10,2) NOT NULL,
+  `status` enum('submitted','approved','rejected','paid') NOT NULL DEFAULT 'submitted',
+  `linked_item_obligation_id` int(11) DEFAULT NULL,
+  `accountant_notes` text DEFAULT NULL,
+  `approved_by` int(11) DEFAULT NULL,
+  `approved_at` datetime DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `transfer_reference` (`transfer_reference`),
+  KEY `member_id` (`member_id`),
+  KEY `submitted_by_user_id` (`submitted_by_user_id`),
+  KEY `linked_item_obligation_id` (`linked_item_obligation_id`),
+  KEY `approved_by` (`approved_by`),
+  CONSTRAINT `expense_requests_ibfk_1` FOREIGN KEY (`member_id`) REFERENCES `members` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `expense_requests_ibfk_2` FOREIGN KEY (`submitted_by_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `expense_requests_ibfk_3` FOREIGN KEY (`linked_item_obligation_id`) REFERENCES `item_obligations` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `expense_requests_ibfk_4` FOREIGN KEY (`approved_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `expense_request_items` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `expense_request_id` int(11) NOT NULL,
+  `description` varchar(255) NOT NULL,
+  `amount` decimal(10,2) NOT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `expense_request_id` (`expense_request_id`),
+  CONSTRAINT `expense_request_items_ibfk_1` FOREIGN KEY (`expense_request_id`) REFERENCES `expense_requests` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `expense_request_documents` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `expense_request_id` int(11) NOT NULL,
+  `file_name` varchar(255) NOT NULL,
+  `file_path` varchar(255) NOT NULL,
+  `file_size` int(11) DEFAULT NULL,
+  `uploaded_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `uploaded_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `expense_request_id` (`expense_request_id`),
+  KEY `uploaded_by` (`uploaded_by`),
+  CONSTRAINT `expense_request_documents_ibfk_1` FOREIGN KEY (`expense_request_id`) REFERENCES `expense_requests` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `expense_request_documents_ibfk_2` FOREIGN KEY (`uploaded_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Privacy Policy versions (stores different versions of the privacy policy)

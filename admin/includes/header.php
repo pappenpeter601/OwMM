@@ -22,6 +22,13 @@
     <?php endif; ?>
 </head>
 <body>
+    <div class="mobile-topbar">
+        <button type="button" class="mobile-menu-toggle" aria-label="Navigation öffnen"
+                onclick="document.querySelector('.sidebar')?.classList.toggle('active'); document.querySelector('.sidebar-overlay')?.classList.toggle('active');">
+            <i class="fas fa-bars"></i> Menü
+        </button>
+    </div>
+    <div class="sidebar-overlay" onclick="document.querySelector('.sidebar')?.classList.remove('active'); this.classList.remove('active');"></div>
     <div class="admin-wrapper">
         <aside class="sidebar">
             <div class="sidebar-header">
@@ -87,6 +94,11 @@
                 <a href="kontofuehrung.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'kontofuehrung.php' ? 'active' : ''; ?>">
                     <i class="fas fa-wallet"></i> Kontoführung
                 </a>
+                <?php if (has_permission('financial_report.php')): ?>
+                <a href="financial_report.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'financial_report.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-chart-line"></i> Finanzbericht
+                </a>
+                <?php endif; ?>
                 <a href="members.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'members.php' ? 'active' : ''; ?>">
                     <i class="fas fa-user"></i> Mitglieder
                 </a>
@@ -101,6 +113,12 @@
                 </a>
                 <a href="payment_reminders.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'payment_reminders.php' ? 'active' : ''; ?>">
                     <i class="fas fa-envelope"></i> Zahlungserinnerungen
+                </a>
+                <?php endif; ?>
+
+                <?php if (has_permission('expense_requests.php')): ?>
+                <a href="expense_requests.php" class="nav-item <?php echo basename($_SERVER['PHP_SELF']) == 'expense_requests.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-receipt"></i> Belege Einreichen
                 </a>
                 <?php endif; ?>
                 

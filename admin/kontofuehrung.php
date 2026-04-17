@@ -9,6 +9,7 @@ if (!is_logged_in() || !has_permission('kontofuehrung.php')) {
 }
 
 $db = getDBConnection();
+ensure_financial_reporting_support();
 $message = '';
 $error = '';
 
@@ -115,25 +116,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $transaction_id = $_POST['transaction_id'];
         $obligation_id = $_POST['obligation_id'];
         $obligation_type = $_POST['obligation_type'] ?? 'fee'; // 'fee' or 'item'
-        $amount = $_POST['amount'];
+        $amount = str_replace(',', '.', (string) ($_POST['amount'] ?? '0'));
         $payment_date = $_POST['payment_date'];
         
         try {
+            if ((float) $amount <= 0) {
+                throw new Exception('Bitte geben Sie einen gültigen Betrag ein.');
+            }
             if ($obligation_type === 'fee') {
                 add_payment_to_obligation($obligation_id, $amount, $payment_date, $transaction_id, 'bank', null, $_SESSION['user_id']);
-            } elseif ($obligation_type === 'item') {
+            } elseif (in_array($obligation_type, ['item', 'expense'], true)) {
                 // Update item obligation
                 $db->beginTransaction();
+                $linkAmount = abs((float) $amount);
                 
                 $stmt = $db->prepare("SELECT total_amount, paid_amount, status FROM item_obligations WHERE id = :id");
                 $stmt->execute([':id' => $obligation_id]);
                 $obl = $stmt->fetch();
                 
                 if (!$obl) {
-                    throw new Exception('Artikel-Forderung nicht gefunden');
+                    throw new Exception('Forderung nicht gefunden');
+                }
+
+                $stmt = $db->prepare("SELECT status, transfer_reference FROM expense_requests WHERE linked_item_obligation_id = :id LIMIT 1");
+                $stmt->execute([':id' => $obligation_id]);
+                $expenseRequest = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($expenseRequest && ($expenseRequest['status'] ?? '') !== 'approved') {
+                    throw new Exception('Erstattungen können erst nach Genehmigung verknüpft werden. Bitte den Antrag zuerst freigeben.');
+                }
+
+                $stmt = $db->prepare("SELECT amount FROM transactions WHERE id = :id");
+                $stmt->execute([':id' => $transaction_id]);
+                $tx = $stmt->fetch();
+                if (!$tx) {
+                    throw new Exception('Transaktion nicht gefunden');
+                }
+
+                $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) FROM member_payments WHERE transaction_id = :id");
+                $stmt->execute([':id' => $transaction_id]);
+                $feeLinked = (float) $stmt->fetchColumn();
+
+                $stmt = $db->prepare("SELECT COALESCE(SUM(CASE
+                                                            WHEN er.id IS NOT NULL AND t.amount > 0 THEN -p.amount
+                                                            ELSE p.amount
+                                                         END), 0)
+                                      FROM item_obligation_payments p
+                                      JOIN transactions t ON t.id = p.transaction_id
+                                      LEFT JOIN expense_requests er ON er.linked_item_obligation_id = p.obligation_id
+                                      WHERE p.transaction_id = :id");
+                $stmt->execute([':id' => $transaction_id]);
+                $itemLinked = (float) $stmt->fetchColumn();
+
+                $signedEffect = ($expenseRequest && (float) $tx['amount'] > 0) ? -$linkAmount : $linkAmount;
+                $remaining = abs((float) $tx['amount']) - ($feeLinked + $itemLinked);
+                if ($signedEffect > $remaining + 0.0001) {
+                    throw new Exception('Verknüpfung überschreitet den noch verfügbaren Transaktionsbetrag');
                 }
                 
-                $new_paid = $obl['paid_amount'] + $amount;
+                $new_paid = $obl['paid_amount'] + $linkAmount;
                 $new_status = 'open';
                 
                 if ($new_paid >= $obl['total_amount']) {
@@ -157,12 +197,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     ':obligation_id' => $obligation_id,
                     ':transaction_id' => $transaction_id,
                     ':payment_date' => $payment_date,
-                    ':amount' => $amount,
+                    ':amount' => $linkAmount,
                     ':payment_method' => 'bank',
                     ':created_by' => $_SESSION['user_id']
                 ]);
                 
                 $db->commit();
+                sync_expense_request_status_from_obligation($obligation_id);
             }
             $message = "Verpflichtung erfolgreich verknüpft";
         } catch (Exception $e) {
@@ -243,6 +284,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             
             $db->commit();
+            if (!empty($payment['obligation_id'])) {
+                sync_expense_request_status_from_obligation($payment['obligation_id']);
+            }
             $message = "Verknüpfung entfernt";
         } catch (Exception $e) {
             $db->rollBack();
@@ -257,6 +301,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 // Mark item obligation as paid without changing the paid amount
                 $stmt = $db->prepare("UPDATE item_obligations SET status = 'paid' WHERE id = :id");
                 $stmt->execute([':id' => $obligation_id]);
+                sync_expense_request_status_from_obligation($obligation_id);
             } else {
                 // Mark fee obligation as paid without changing the paid amount
                 $stmt = $db->prepare("UPDATE member_fee_obligations SET status = 'paid' WHERE id = :id");
@@ -276,9 +321,14 @@ $start_date = $_GET['start_date'] ?? '';
 $end_date = $_GET['end_date'] ?? '';
 $status_filter = $_GET['status_filter'] ?? ''; // 'open', 'income', 'expense'
 $search_text = trim($_GET['search'] ?? '');
+$has_any_get_filters = !empty($_GET);
 
-// Set default date range to current year if not specified
-if (empty($start_date) && empty($end_date)) {
+// Business year and date range are treated as alternative filters.
+// If a business year is selected, ignore any date values to avoid accidental double filtering.
+if ($business_year_filter !== '') {
+    $start_date = '';
+    $end_date = '';
+} elseif (!$has_any_get_filters && empty($start_date) && empty($end_date)) {
     $start_date = date('Y') . '-01-01';
     $end_date = date('Y') . '-12-31';
 }
@@ -343,6 +393,12 @@ try {
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
     $transactions = $stmt->fetchAll();
+
+    foreach ($transactions as $tx) {
+        if ((float) $tx['amount'] < 0) {
+            auto_match_expense_request_to_transaction((int) $tx['id']);
+        }
+    }
     
     if ($search_text !== '') {
         error_log('[kontofuehrung] SEARCH DEBUG - Found ' . count($transactions) . ' results before status filter');
@@ -369,10 +425,16 @@ if ($status_filter === 'open') {
             
             return !$hasFeePayment && !$hasItemPayment;
         } else {
-            // Expense: check if no documents
+            // Expense: check if neither documents nor reimbursement links exist
             $stmt = $db->prepare("SELECT COUNT(*) FROM transaction_documents WHERE transaction_id = :id");
             $stmt->execute(['id' => $t['id']]);
-            return $stmt->fetchColumn() == 0;
+            $hasDocuments = $stmt->fetchColumn() > 0;
+
+            $stmt = $db->prepare("SELECT COUNT(*) FROM item_obligation_payments WHERE transaction_id = :id");
+            $stmt->execute(['id' => $t['id']]);
+            $hasItemPayment = $stmt->fetchColumn() > 0;
+
+            return !$hasDocuments && !$hasItemPayment;
         }
     });
 } elseif ($status_filter === 'income') {
@@ -485,8 +547,13 @@ include 'includes/header.php';
     <div class="alert alert-error"><?php echo htmlspecialchars($error); ?></div>
 <?php endif; ?>
 
-<div class="page-header">
+<div class="page-header" style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
     <h1>Kontoführung - Kassenprüfung</h1>
+    <?php if (has_permission('financial_report.php')): ?>
+        <a href="financial_report.php" class="btn btn-secondary">
+            <i class="fas fa-chart-line"></i> Finanzbericht
+        </a>
+    <?php endif; ?>
 </div>
 
 <!-- Summary Cards -->
@@ -575,6 +642,7 @@ include 'includes/header.php';
                 <label for="start_date">Von Datum</label>
                 <input type="date" id="start_date" name="start_date" 
                        value="<?php echo $start_date ? $start_date : ''; ?>">
+                <small style="display:block; color:#666; margin-top:0.25rem;">Alternativ zum Geschäftsjahr</small>
             </div>
             <div class="form-group">
                 <label for="end_date">Bis Datum</label>
@@ -646,20 +714,42 @@ include 'includes/header.php';
                         <td class="category-gj-status" style="background-color: <?php echo !empty($transaction['cat_color']) ? htmlspecialchars($transaction['cat_color']) . '20' : '#f9f9f9'; ?>; border-left: 4px solid <?php echo !empty($transaction['cat_color']) ? htmlspecialchars($transaction['cat_color']) : '#ccc'; ?>;">
                             <!-- Kategorie -->
                             <div style="margin-bottom: 0.75rem;">
-                                <form method="POST" class="inline-form" onsubmit="return updateCategory(event, <?php echo $transaction['id']; ?>);">
-                                    <input type="hidden" name="action" value="update_transaction">
-                                    <input type="hidden" name="id" value="<?php echo $transaction['id']; ?>">
-                                    <input type="hidden" name="ajax" value="1">
-                                    <select name="category_id" class="category-select" onchange="this.form.requestSubmit()" <?php echo $is_locked ? 'disabled' : ''; ?>>
-                                        <option value="">—</option>
-                                        <?php foreach ($categories as $cat): ?>
-                                            <option value="<?php echo htmlspecialchars($cat['id']); ?>"
-                                                    <?php echo $transaction['category_id'] == $cat['id'] ? 'selected' : ''; ?>>
-                                                <?php echo htmlspecialchars($cat['name']); ?>
-                                            </option>
+                                <?php
+                                $stmt = $db->prepare("SELECT DISTINCT COALESCE(tc.name, 'Ohne Kategorie') AS category_name,
+                                                             COALESCE(tc.color, '#78909c') AS category_color
+                                                      FROM member_payments mp
+                                                      LEFT JOIN member_fee_obligations mfo ON mp.obligation_id = mfo.id
+                                                      LEFT JOIN transaction_categories tc ON mfo.category_id = tc.id
+                                                      WHERE mp.transaction_id = :tx1
+                                                      UNION
+                                                      SELECT DISTINCT COALESCE(tc.name, 'Ohne Kategorie') AS category_name,
+                                                             COALESCE(tc.color, '#78909c') AS category_color
+                                                      FROM item_obligation_payments ip
+                                                      LEFT JOIN item_obligations io ON ip.obligation_id = io.id
+                                                      LEFT JOIN transaction_categories tc ON io.category_id = tc.id
+                                                      WHERE ip.transaction_id = :tx2");
+                                $stmt->execute([
+                                    ':tx1' => $transaction['id'],
+                                    ':tx2' => $transaction['id']
+                                ]);
+                                $linked_categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                                ?>
+                                <?php if (!empty($linked_categories)): ?>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 0.35rem;">
+                                        <?php foreach ($linked_categories as $linked_category): ?>
+                                            <span class="badge" style="background: <?php echo htmlspecialchars($linked_category['category_color']); ?>; color: #fff;">
+                                                <?php echo htmlspecialchars($linked_category['category_name']); ?>
+                                            </span>
                                         <?php endforeach; ?>
-                                    </select>
-                                </form>
+                                    </div>
+                                <?php elseif (!empty($transaction['cat_name'])): ?>
+                                    <span class="badge" style="background: <?php echo htmlspecialchars($transaction['cat_color'] ?: '#78909c'); ?>; color: #fff;">
+                                        <?php echo htmlspecialchars($transaction['cat_name']); ?>
+                                    </span>
+                                    <div style="font-size: 0.75rem; color: #666; margin-top: 0.25rem;">direkt auf Transaktion</div>
+                                <?php else: ?>
+                                    <span style="font-size: 0.85rem; color: #666;">wird über Verpflichtungen vergeben</span>
+                                <?php endif; ?>
                             </div>
                             <!-- GJ -->
                             <div style="margin-bottom: 0.75rem;">
@@ -696,7 +786,15 @@ include 'includes/header.php';
                                 $fee_count = $linkInfo['count'];
                                 $fee_linked = $linkInfo['total_linked'];
                                 
-                                $stmt = $db->prepare("SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total_linked FROM item_obligation_payments WHERE transaction_id = :id");
+                                $stmt = $db->prepare("SELECT COUNT(*) as count,
+                                                             COALESCE(SUM(CASE
+                                                                WHEN er.id IS NOT NULL AND t.amount > 0 THEN -p.amount
+                                                                ELSE p.amount
+                                                             END), 0) as total_linked
+                                                      FROM item_obligation_payments p
+                                                      JOIN transactions t ON t.id = p.transaction_id
+                                                      LEFT JOIN expense_requests er ON er.linked_item_obligation_id = p.obligation_id
+                                                      WHERE p.transaction_id = :id");
                                 $stmt->execute([':id' => $transaction['id']]);
                                 $linkInfo = $stmt->fetch();
                                 $item_count = $linkInfo['count'];
@@ -715,17 +813,37 @@ include 'includes/header.php';
                                     Offen: <?php echo number_format($remaining_overview, 2, ',', '.'); ?> €
                                 </div>
                             <?php else: ?>
-                                <!-- Show Documents for expenses -->
-                                <button class="btn btn-sm btn-secondary" 
-                                        onclick="toggleDocs(<?php echo $transaction['id']; ?>)">
-                                    <i class="fas fa-file-pdf"></i> 
-                                    <?php 
-                                    $stmt = $db->prepare("SELECT COUNT(*) as count FROM transaction_documents WHERE transaction_id = :id");
-                                    $stmt->execute([':id' => $transaction['id']]);
-                                    $doc_count = $stmt->fetch()['count'];
-                                    echo $doc_count > 0 ? $doc_count : 'Hochladen';
-                                    ?>
-                                </button>
+                                <!-- Show Documents + Expense Reimbursement Links for expenses -->
+                                <?php 
+                                $stmt = $db->prepare("SELECT COUNT(*) as count FROM transaction_documents WHERE transaction_id = :id");
+                                $stmt->execute([':id' => $transaction['id']]);
+                                $doc_count = $stmt->fetch()['count'];
+
+                                $stmt = $db->prepare("SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total_linked
+                                                     FROM item_obligation_payments
+                                                     WHERE transaction_id = :id");
+                                $stmt->execute([':id' => $transaction['id']]);
+                                $expenseLinkInfo = $stmt->fetch(PDO::FETCH_ASSOC);
+                                $expense_link_count = (int)($expenseLinkInfo['count'] ?? 0);
+                                $expense_link_total = (float)($expenseLinkInfo['total_linked'] ?? 0);
+                                ?>
+                                <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+                                    <button class="btn btn-sm btn-secondary" 
+                                            onclick="toggleDocs(<?php echo $transaction['id']; ?>)">
+                                        <i class="fas fa-file-pdf"></i> 
+                                        <?php echo $doc_count > 0 ? $doc_count . ' Beleg' . ($doc_count == 1 ? '' : 'e') : 'Belege'; ?>
+                                    </button>
+                                    <button class="btn btn-sm btn-info" 
+                                            onclick="toggleObligations(<?php echo $transaction['id']; ?>)">
+                                        <i class="fas fa-receipt"></i> 
+                                        <?php echo $expense_link_count > 0 ? $expense_link_count . ' Verpflichtung' . ($expense_link_count == 1 ? '' : 'en') : 'Verknüpfen'; ?>
+                                    </button>
+                                    <?php if ($expense_link_count > 0): ?>
+                                        <div style="font-size: 0.85rem; color: #555; margin-top: 0.1rem;">
+                                            Verknüpft: <?php echo number_format($expense_link_total, 2, ',', '.'); ?> €
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
                             <?php endif; ?>
                         </td>
                         <td class="notes">
@@ -795,32 +913,55 @@ include 'includes/header.php';
                         <td colspan="9" data-transaction-id="<?php echo $transaction['id']; ?>">
                             <div class="obligations-panel" style="padding: 1.5rem; overflow-x: auto;">
                                 <?php 
-                                // Get all open/partial member fee obligations
-                                $stmt = $db->query("SELECT o.id, o.fee_year, o.fee_amount as total_amount, o.paid_amount, o.status, 
-                                                   m.first_name, m.last_name, m.member_number, 
-                                                   'fee' as obligation_type,
-                                                   CONCAT('Mitgliedsbeitrag ', o.fee_year) as description
-                                                   FROM member_fee_obligations o 
-                                                   JOIN members m ON o.member_id = m.id 
-                                                   WHERE o.status IN ('open', 'partial') 
-                                                   ORDER BY m.last_name, m.first_name, o.fee_year DESC");
-                                $fee_obligations = $stmt->fetchAll();
+                                $is_income_transaction = $transaction['amount'] > 0;
+                                $fee_obligations = [];
+                                $item_obligations = [];
+
+                                if ($is_income_transaction) {
+                                    // Incoming payments: classic receivables
+                                    $stmt = $db->query("SELECT o.id, o.fee_year, o.fee_amount as total_amount, o.paid_amount, o.status, 
+                                                       m.first_name, m.last_name, m.member_number, 
+                                                       'fee' as obligation_type,
+                                                       'BEITRAG' as type_label,
+                                                       CONCAT('Mitgliedsbeitrag ', o.fee_year) as description
+                                                       FROM member_fee_obligations o 
+                                                       JOIN members m ON o.member_id = m.id 
+                                                       WHERE o.status IN ('open', 'partial') 
+                                                       ORDER BY m.last_name, m.first_name, o.fee_year DESC");
+                                    $fee_obligations = $stmt->fetchAll();
+
+                                    $stmt = $db->query("SELECT io.id, io.total_amount, io.paid_amount, io.status,
+                                                       COALESCE(m.first_name, '') as first_name,
+                                                       COALESCE(m.last_name, io.receiver_name) as last_name,
+                                                       COALESCE(m.member_number, '') as member_number,
+                                                       CASE WHEN er.id IS NOT NULL THEN 'expense' ELSE 'item' END as obligation_type,
+                                                       CASE WHEN er.id IS NOT NULL THEN 'ERSTATTUNG' ELSE 'FORDERUNG' END as type_label,
+                                                       CASE WHEN er.id IS NOT NULL THEN CONCAT('Erstattungsantrag ', er.transfer_reference) ELSE CONCAT('Forderung #', io.id) END as description,
+                                                       NULL as fee_year
+                                                       FROM item_obligations io
+                                                       LEFT JOIN members m ON io.member_id = m.id
+                                                       LEFT JOIN expense_requests er ON er.linked_item_obligation_id = io.id
+                                                       WHERE io.status = 'open' AND (er.id IS NULL OR er.status = 'approved')
+                                                       ORDER BY io.created_at DESC");
+                                    $item_obligations = $stmt->fetchAll();
+                                } else {
+                                    // Outgoing payments: reimbursement requests
+                                    $stmt = $db->query("SELECT io.id, io.total_amount, io.paid_amount, io.status,
+                                                       COALESCE(m.first_name, '') as first_name,
+                                                       COALESCE(m.last_name, io.receiver_name) as last_name,
+                                                       COALESCE(m.member_number, '') as member_number,
+                                                       'expense' as obligation_type,
+                                                       'ERSTATTUNG' as type_label,
+                                                       CONCAT('Erstattungsantrag ', er.transfer_reference) as description,
+                                                       NULL as fee_year
+                                                       FROM item_obligations io
+                                                       JOIN expense_requests er ON er.linked_item_obligation_id = io.id
+                                                       LEFT JOIN members m ON io.member_id = m.id
+                                                       WHERE io.status = 'open' AND er.status = 'approved'
+                                                       ORDER BY io.created_at DESC");
+                                    $item_obligations = $stmt->fetchAll();
+                                }
                                 
-                                // Get all open item obligations
-                                $stmt = $db->query("SELECT io.id, io.total_amount, io.paid_amount, io.status,
-                                                   COALESCE(m.first_name, '') as first_name,
-                                                   COALESCE(m.last_name, io.receiver_name) as last_name,
-                                                   COALESCE(m.member_number, '') as member_number,
-                                                   'item' as obligation_type,
-                                                   CONCAT('Artikel-Forderung #', io.id) as description,
-                                                   NULL as fee_year
-                                                   FROM item_obligations io
-                                                   LEFT JOIN members m ON io.member_id = m.id
-                                                   WHERE io.status = 'open'
-                                                   ORDER BY io.created_at DESC");
-                                $item_obligations = $stmt->fetchAll();
-                                
-                                // Merge both types
                                 $all_obligations = array_merge($fee_obligations, $item_obligations);
                                 ?>
                                     <?php 
@@ -842,12 +983,23 @@ include 'includes/header.php';
                                                           COALESCE(m.first_name, '') as first_name,
                                                           COALESCE(m.last_name, o.receiver_name) as last_name,
                                                           COALESCE(m.member_number, '') as member_number,
-                                                          'item' as payment_type,
-                                                          CONCAT('Artikel-Forderung #', o.id) as description,
-                                                          NULL as fee_year
+                                                          CASE 
+                                                              WHEN er.id IS NOT NULL THEN 'expense'
+                                                              WHEN o.notes LIKE '[HISTORICAL_EXPENSE_MIGRATION]%' THEN 'historical_expense'
+                                                              ELSE 'item'
+                                                          END as payment_type,
+                                                          CASE 
+                                                              WHEN er.id IS NOT NULL THEN CONCAT('Erstattungsantrag ', er.transfer_reference)
+                                                              WHEN o.notes LIKE '[HISTORICAL_EXPENSE_MIGRATION]%' THEN CONCAT('Historische Ausgabe #', o.id)
+                                                              ELSE CONCAT('Forderung #', o.id)
+                                                          END as description,
+                                                          NULL as fee_year,
+                                                          (SELECT COUNT(*) FROM expense_request_documents erd WHERE erd.expense_request_id = er.id) as expense_doc_count,
+                                                          (SELECT COUNT(*) FROM transaction_documents td WHERE td.transaction_id = p.transaction_id) as transaction_doc_count
                                                           FROM item_obligation_payments p 
                                                           JOIN item_obligations o ON p.obligation_id = o.id 
                                                           LEFT JOIN members m ON o.member_id = m.id 
+                                                          LEFT JOIN expense_requests er ON er.linked_item_obligation_id = o.id
                                                           WHERE p.transaction_id = :id 
                                                           ORDER BY p.payment_date DESC");
                                     $stmt->execute([':id' => $transaction['id']]);
@@ -855,6 +1007,68 @@ include 'includes/header.php';
                                     
                                     // Merge both types
                                     $all_payments = array_merge($fee_payments, $item_payments);
+
+                                    $obligation_docs_by_id = [];
+                                    $item_obligation_ids_for_docs = array_values(array_unique(array_filter(array_map('intval', array_column($item_payments, 'obligation_id')))));
+
+                                    if (!empty($item_obligation_ids_for_docs)) {
+                                        foreach ($item_obligation_ids_for_docs as $oid) {
+                                            $obligation_docs_by_id[$oid] = [];
+                                        }
+
+                                        $placeholders = implode(',', array_fill(0, count($item_obligation_ids_for_docs), '?'));
+
+                                        $docQueries = [
+                                            "SELECT er.linked_item_obligation_id AS obligation_id, erd.file_name, erd.file_path, erd.file_size
+                                             FROM expense_requests er
+                                             JOIN expense_request_documents erd ON erd.expense_request_id = er.id
+                                             WHERE er.linked_item_obligation_id IN ($placeholders)
+                                             ORDER BY erd.uploaded_at DESC",
+                                            "SELECT iod.obligation_id, iod.file_name, iod.file_path, iod.file_size
+                                             FROM item_obligation_documents iod
+                                             WHERE iod.obligation_id IN ($placeholders)
+                                             ORDER BY iod.uploaded_at DESC",
+                                            "SELECT p.obligation_id, td.file_name, td.file_path, td.file_size
+                                             FROM item_obligation_payments p
+                                             JOIN transaction_documents td ON td.transaction_id = p.transaction_id
+                                             WHERE p.obligation_id IN ($placeholders)
+                                             ORDER BY td.uploaded_at DESC",
+                                            "SELECT p.obligation_id, td.file_name, td.file_path, td.file_size
+                                             FROM item_obligation_payments p
+                                             JOIN transactions t ON t.id = p.transaction_id
+                                             JOIN transaction_documents td ON td.id = t.document_id
+                                             WHERE p.obligation_id IN ($placeholders)
+                                             ORDER BY td.uploaded_at DESC"
+                                        ];
+
+                                        foreach ($docQueries as $docSql) {
+                                            $stmt = $db->prepare($docSql);
+                                            $stmt->execute($item_obligation_ids_for_docs);
+                                            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $docRow) {
+                                                $oid = (int)($docRow['obligation_id'] ?? 0);
+                                                if ($oid <= 0) {
+                                                    continue;
+                                                }
+                                                if (!isset($obligation_docs_by_id[$oid])) {
+                                                    $obligation_docs_by_id[$oid] = [];
+                                                }
+
+                                                $docKey = ($docRow['file_path'] ?? '') . '|' . ($docRow['file_name'] ?? '');
+                                                $alreadyAdded = false;
+                                                foreach ($obligation_docs_by_id[$oid] as $existingDoc) {
+                                                    $existingKey = ($existingDoc['file_path'] ?? '') . '|' . ($existingDoc['file_name'] ?? '');
+                                                    if ($existingKey === $docKey) {
+                                                        $alreadyAdded = true;
+                                                        break;
+                                                    }
+                                                }
+
+                                                if (!$alreadyAdded) {
+                                                    $obligation_docs_by_id[$oid][] = $docRow;
+                                                }
+                                            }
+                                        }
+                                    }
                                     ?>
                                     
                                     <div class="obligations-list">
@@ -866,6 +1080,10 @@ include 'includes/header.php';
                                                         <div style="flex: 1; min-width: 300px;">
                                                             <?php if ($payment['payment_type'] === 'item'): ?>
                                                                 <span style="color: #2196f3; font-size: 0.85rem; font-weight: 600; margin-right: 0.5rem;">[ARTIKEL]</span>
+                                                            <?php elseif ($payment['payment_type'] === 'expense'): ?>
+                                                                <span style="color: #7b1fa2; font-size: 0.85rem; font-weight: 600; margin-right: 0.5rem;">[ERSTATTUNG]</span>
+                                                            <?php elseif ($payment['payment_type'] === 'historical_expense'): ?>
+                                                                <span style="color: #455a64; font-size: 0.85rem; font-weight: 600; margin-right: 0.5rem;">[HISTORISCHE AUSGABE]</span>
                                                             <?php endif; ?>
                                                             <strong><?php echo htmlspecialchars($payment['first_name'] . ' ' . $payment['last_name']); ?></strong>
                                                             <?php if (!empty($payment['member_number'])): ?>
@@ -877,13 +1095,39 @@ include 'includes/header.php';
                                                                 Betrag: <?php echo number_format($payment['amount'], 2, ',', '.'); ?> € | 
                                                                 Status: <span class="badge badge-<?php echo $payment['status']; ?>"><?php echo ucfirst($payment['status']); ?></span>
                                                             </small>
+                                                            <?php $payment_docs = $obligation_docs_by_id[(int)($payment['obligation_id'] ?? 0)] ?? []; ?>
+                                                            <div style="margin-top: 0.4rem; display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center;">
+                                                                <a href="view_item_obligation.php?id=<?php echo (int)$payment['obligation_id']; ?>" class="btn btn-sm btn-secondary" target="_blank">
+                                                                    <i class="fas fa-eye"></i> Verpflichtung öffnen
+                                                                </a>
+                                                                <?php if (!empty($payment_docs)): ?>
+                                                                    <span class="badge badge-info">
+                                                                        <i class="fas fa-file"></i>
+                                                                        <?php echo count($payment_docs); ?> Beleg<?= (count($payment_docs) === 1) ? '' : 'e' ?>
+                                                                    </span>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                            <?php if (!empty($payment_docs)): ?>
+                                                                <div style="margin-top: 0.5rem; display: flex; gap: 0.35rem; flex-wrap: wrap;">
+                                                                    <?php foreach ($payment_docs as $doc): ?>
+                                                                        <a href="../uploads/<?php echo htmlspecialchars($doc['file_path']); ?>"
+                                                                           target="_blank"
+                                                                           class="doc-link"
+                                                                           style="padding: 0.35rem 0.6rem; font-size: 0.85rem;"
+                                                                           onclick="openDocumentPreview('<?php echo htmlspecialchars($doc['file_path'], ENT_QUOTES); ?>', '<?php echo htmlspecialchars($doc['file_name'], ENT_QUOTES); ?>'); return false;">
+                                                                            <i class="fas fa-file"></i>
+                                                                            <?php echo htmlspecialchars($doc['file_name']); ?>
+                                                                        </a>
+                                                                    <?php endforeach; ?>
+                                                                </div>
+                                                            <?php endif; ?>
                                                         </div>
                                                         <div style="display: flex; gap: 0.5rem; flex-shrink: 0; flex-wrap: wrap;">
                                                             <?php if ($payment['status'] === 'partial' || ($payment['status'] === 'open' && $payment['amount'] > 0)): ?>
                                                                 <form method="POST" style="margin: 0;">
                                                                     <input type="hidden" name="action" value="mark_obligation_paid">
                                                                     <input type="hidden" name="obligation_id" value="<?php echo $payment['obligation_id']; ?>">
-                                                                    <input type="hidden" name="obligation_type" value="<?php echo $payment['payment_type']; ?>">
+                                                                    <input type="hidden" name="obligation_type" value="<?php echo in_array($payment['payment_type'], ['expense', 'historical_expense'], true) ? 'item' : $payment['payment_type']; ?>">
                                                                     <button type="submit" class="btn btn-sm btn-success" onclick="return confirm('Forderung als bezahlt markieren? Der Restbetrag wird nicht weiter eingefordert.')" title="Forderung als vollständig bezahlt markieren">
                                                                         <i class="fas fa-check-circle"></i> Als bezahlt markieren
                                                                     </button>
@@ -892,7 +1136,7 @@ include 'includes/header.php';
                                                             <form method="POST" style="margin: 0;">
                                                                 <input type="hidden" name="action" value="unlink_obligation">
                                                                 <input type="hidden" name="payment_id" value="<?php echo $payment['id']; ?>">
-                                                                <input type="hidden" name="payment_type" value="<?php echo $payment['payment_type']; ?>">
+                                                                <input type="hidden" name="payment_type" value="<?php echo in_array($payment['payment_type'], ['expense', 'historical_expense'], true) ? 'item' : $payment['payment_type']; ?>">
                                                                 <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Verknüpfung wirklich entfernen?')">
                                                                     <i class="fas fa-unlink"></i> Entfernen
                                                                 </button>
@@ -908,7 +1152,7 @@ include 'includes/header.php';
                                     
                                     <div class="link-obligation" style="margin-top: 1.5rem; background: #f9f9f9; padding: 1rem; border-radius: 8px; border: 1px solid #e0e0e0;">
                                         <h4 style="margin: 0 0 1rem 0; color: #333; font-size: 1.1rem; display: flex; align-items: center; gap: 0.5rem;">
-                                            <i class="fas fa-link" style="color: #2196f3;"></i> Forderung verknüpfen
+                                            <i class="fas fa-link" style="color: #2196f3;"></i> <?php echo $transaction['amount'] > 0 ? 'Forderung verknüpfen' : 'Erstattung verknüpfen'; ?>
                                         </h4>
                                         <form method="POST" class="link-form" id="link-form-<?php echo $transaction['id']; ?>" onsubmit="handleLinkObligation(event, <?php echo $transaction['id']; ?>)">
                                             <input type="hidden" name="action" value="link_obligation">
@@ -918,11 +1162,14 @@ include 'includes/header.php';
                                             
                                             <!-- Search Section -->
                                             <div class="form-group" style="margin-bottom: 1rem;">
-                                                <label style="font-weight: 600; margin-bottom: 0.5rem; display: block; color: #555;">Mitglied oder Forderung suchen</label>
+                                                <label style="font-weight: 600; margin-bottom: 0.5rem; display: block; color: #555;"><?php echo $transaction['amount'] > 0 ? 'Mitglied, Forderung oder Erstattungsantrag suchen' : 'Person oder Erstattungsantrag suchen'; ?></label>
+                                                <?php if (!$is_income_transaction): ?>
+                                                    <small style="display: block; margin-bottom: 0.5rem; color: #666;">Es werden nur bereits genehmigte Erstattungsanträge zur Verknüpfung angeboten.</small>
+                                                <?php endif; ?>
                                                 <div style="position: relative;">
                                                     <input type="text" 
                                                            id="member-search-<?php echo $transaction['id']; ?>" 
-                                                           placeholder="Name, Mitgliedsnummer oder Forderungs-ID eingeben..." 
+                                                           placeholder="<?php echo $transaction['amount'] > 0 ? 'Name, Mitgliedsnummer oder Forderungs-ID eingeben...' : 'Name oder Referenz eingeben...'; ?>" 
                                                            autocomplete="off"
                                                            style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 6px; font-size: 1rem; transition: border-color 0.2s;"
                                                            onfocus="this.style.borderColor='#2196f3'" 
@@ -959,9 +1206,14 @@ include 'includes/header.php';
                                                         $stmt->execute([':id' => $transaction['id']]);
                                                         $fee_linked = $stmt->fetch()['total_linked'];
                                                         
-                                                        $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_linked 
-                                                                             FROM item_obligation_payments 
-                                                                             WHERE transaction_id = :id");
+                                                        $stmt = $db->prepare("SELECT COALESCE(SUM(CASE
+                                                                                                    WHEN er.id IS NOT NULL AND t.amount > 0 THEN -p.amount
+                                                                                                    ELSE p.amount
+                                                                                                 END), 0) as total_linked
+                                                                             FROM item_obligation_payments p
+                                                                             JOIN transactions t ON t.id = p.transaction_id
+                                                                             LEFT JOIN expense_requests er ON er.linked_item_obligation_id = p.obligation_id
+                                                                             WHERE p.transaction_id = :id");
                                                         $stmt->execute([':id' => $transaction['id']]);
                                                         $item_linked = $stmt->fetch()['total_linked'];
                                                         
@@ -980,20 +1232,36 @@ include 'includes/header.php';
                                                 <div style="flex: 1; min-width: 200px;">
                                                     <label style="font-weight: 600; margin-bottom: 0.5rem; display: block; color: #555; font-size: 0.9rem;">Betrag (€)</label>
                                                     <div style="position: relative;">
-                                                        <input type="number" 
+                                                        <input type="text" 
                                                                name="amount" 
                                                                id="amount-<?php echo $transaction['id']; ?>"
-                                                               step="0.01" 
+                                                               inputmode="decimal"
+                                                               placeholder="0,00"
                                                                required 
                                                                style="width: 100%; padding: 0.75rem; border: 2px solid #ddd; border-radius: 6px; font-size: 1rem; font-weight: 600;"
-                                                               title="Wird automatisch auf Transaktionsbetrag minus bereits verknüpfte Beträge gesetzt">
+                                                               title="Wird automatisch auf Transaktionsbetrag minus bereits verknüpfte Beträge gesetzt"
+                                                               oninput="normalizeGermanMoneyInput(this); updateLinkButtonState(<?php echo $transaction['id']; ?>)"
+                                                               onblur="formatGermanMoneyInput(this); updateLinkButtonState(<?php echo $transaction['id']; ?>)">
                                                         <?php 
                                                         // Calculate remaining amount info for display
                                                         $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_linked 
                                                                              FROM member_payments 
                                                                              WHERE transaction_id = :id");
                                                         $stmt->execute([':id' => $transaction['id']]);
-                                                        $current_linked = $stmt->fetch()['total_linked'];
+                                                        $fee_current_linked = (float) $stmt->fetch()['total_linked'];
+
+                                                        $stmt = $db->prepare("SELECT COALESCE(SUM(CASE
+                                                                                                    WHEN er.id IS NOT NULL AND t.amount > 0 THEN -p.amount
+                                                                                                    ELSE p.amount
+                                                                                                 END), 0) as total_linked
+                                                                             FROM item_obligation_payments p
+                                                                             JOIN transactions t ON t.id = p.transaction_id
+                                                                             LEFT JOIN expense_requests er ON er.linked_item_obligation_id = p.obligation_id
+                                                                             WHERE p.transaction_id = :id");
+                                                        $stmt->execute([':id' => $transaction['id']]);
+                                                        $item_current_linked = (float) $stmt->fetch()['total_linked'];
+
+                                                        $current_linked = $fee_current_linked + $item_current_linked;
                                                         $remaining = abs($transaction['amount']) - $current_linked;
                                                         ?>
                                                         <small id="remaining-<?php echo $transaction['id']; ?>" style="position: absolute; top: 100%; left: 0; color: #666; margin-top: 0.25rem; font-size: 0.8rem; white-space: nowrap;">
@@ -1339,6 +1607,35 @@ window.onclick = function(event) {
     }
 }
 
+function parseGermanMoney(value) {
+    return parseFloat(String(value || '0').replace(/\./g, '').replace(',', '.')) || 0;
+}
+
+function normalizeGermanMoneyInput(input) {
+    if (!input) return;
+    let value = String(input.value || '');
+    value = value.replace(/\./g, ',');
+    value = value.replace(/[^0-9,]/g, '');
+
+    const firstComma = value.indexOf(',');
+    if (firstComma !== -1) {
+        const before = value.slice(0, firstComma + 1);
+        const after = value.slice(firstComma + 1).replace(/,/g, '').slice(0, 2);
+        value = before + after;
+    }
+
+    input.value = value;
+}
+
+function formatGermanMoneyInput(input) {
+    if (!input) return;
+    const amount = parseGermanMoney(input.value);
+    input.value = amount > 0 ? amount.toLocaleString('de-DE', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    }) : '';
+}
+
 function clearSelection(transactionId) {
     document.getElementById('selected-obl-' + transactionId).value = '';
     document.getElementById('member-search-' + transactionId).value = '';
@@ -1346,6 +1643,7 @@ function clearSelection(transactionId) {
     document.getElementById('selected-display-' + transactionId).style.display = 'none';
     document.getElementById('member-search-' + transactionId).style.display = 'block';
     document.getElementById('member-search-' + transactionId).focus();
+    updateLinkButtonState(transactionId);
 }
 
 function updateTransactionData(transactionId) {
@@ -1363,6 +1661,28 @@ function updateTransactionData(transactionId) {
 
 // Real-time search for obligations + re-open last section
 document.addEventListener('DOMContentLoaded', function() {
+    const businessYearSelect = document.getElementById('business_year');
+    const startDateInput = document.getElementById('start_date');
+    const endDateInput = document.getElementById('end_date');
+
+    if (businessYearSelect && startDateInput && endDateInput) {
+        businessYearSelect.addEventListener('change', function() {
+            if (this.value !== '') {
+                startDateInput.value = '';
+                endDateInput.value = '';
+            }
+        });
+
+        const clearBusinessYearIfDateSet = function() {
+            if ((startDateInput.value || endDateInput.value) && businessYearSelect.value !== '') {
+                businessYearSelect.value = '';
+            }
+        };
+
+        startDateInput.addEventListener('change', clearBusinessYearIfDateSet);
+        endDateInput.addEventListener('change', clearBusinessYearIfDateSet);
+    }
+
     const openSectionId = sessionStorage.getItem('openObligationSection');
     if (openSectionId) {
         const row = document.getElementById('obls-' + openSectionId);
@@ -1417,7 +1737,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const outstanding = obl.total_amount - obl.paid_amount;
                 const memberNum = obl.member_number || '';
                 const memberNumDisplay = memberNum ? ` (${memberNum})` : '';
-                const typeLabel = obl.obligation_type === 'item' ? '[Artikel] ' : '';
+                const typeLabel = obl.type_label ? '[' + obl.type_label + '] ' : (obl.obligation_type === 'item' ? '[Artikel] ' : '');
                 const displayText = `${typeLabel}${obl.last_name || ''}, ${obl.first_name || ''}${memberNumDisplay} - ${obl.description || ''}`;
                 const yearInfo = obl.fee_year ? `Jahr: ${obl.fee_year} | ` : '';
                 html += `<div class="search-result-item" 
@@ -1461,13 +1781,28 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
+function getTransactionAmount(transactionId) {
+    const dataEl = document.getElementById('transaction-data-' + transactionId);
+    if (!dataEl) return 0;
+    const data = JSON.parse(dataEl.textContent);
+    return parseFloat(data.amount || 0) || 0;
+}
+
 function selectObligation(transactionId, obligationId, displayText, amount, obligationType) {
     document.getElementById('selected-obl-' + transactionId).value = obligationId;
     document.getElementById('selected-type-' + transactionId).value = obligationType || 'fee';
     document.getElementById('selected-text-' + transactionId).textContent = displayText;
     const remaining = getRemaining(transactionId);
-    const clampedAmount = Math.min(amount, remaining);
-    document.getElementById('amount-' + transactionId).value = clampedAmount.toFixed(2);
+    const transactionAmount = getTransactionAmount(transactionId);
+    const isOffset = (obligationType === 'expense' && transactionAmount > 0);
+    const defaultAmount = isOffset ? Math.max(0, Number(amount || 0)) : Math.max(0, Math.min(Number(amount || 0), remaining));
+    const amountInput = document.getElementById('amount-' + transactionId);
+    if (amountInput) {
+        amountInput.value = defaultAmount > 0 ? defaultAmount.toLocaleString('de-DE', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        }) : '';
+    }
     document.getElementById('selected-display-' + transactionId).style.display = 'block';
     document.getElementById('member-search-' + transactionId).style.display = 'none';
     document.getElementById('search-results-' + transactionId).style.display = 'none';
@@ -1478,29 +1813,37 @@ function getRemaining(transactionId) {
     const dataEl = document.getElementById('transaction-data-' + transactionId);
     if (!dataEl) return 0;
     const data = JSON.parse(dataEl.textContent);
-    const amount = parseFloat(data.amount);
-    if (amount <= 0) return 0;
-    return Math.max(0, Math.abs(amount) - parseFloat(data.linked_total));
+    const amount = parseFloat(data.amount || 0);
+    const linkedTotal = parseFloat(data.linked_total || 0);
+    if (!Number.isFinite(amount) || Math.abs(amount) <= 0) return 0;
+    return Math.max(0, Math.abs(amount) - linkedTotal);
 }
 
 function updateLinkButtonState(transactionId) {
     const remaining = getRemaining(transactionId);
+    const transactionAmount = getTransactionAmount(transactionId);
     const amountInput = document.getElementById('amount-' + transactionId);
+    const selectedInput = document.getElementById('selected-obl-' + transactionId);
+    const selectedTypeInput = document.getElementById('selected-type-' + transactionId);
     const form = document.getElementById('link-form-' + transactionId);
     const submitBtn = form ? form.querySelector('button[type="submit"]') : null;
     const remainingEl = document.getElementById('remaining-' + transactionId);
-    const amount = parseFloat(amountInput.value || '0');
+    const amount = parseGermanMoney(amountInput ? amountInput.value : '0');
+    const hasSelection = !!(selectedInput && selectedInput.value);
+    const selectedType = selectedTypeInput ? selectedTypeInput.value : 'fee';
+    const signedEffect = (selectedType === 'expense' && transactionAmount > 0) ? -amount : amount;
 
     if (remainingEl) {
         if (remaining > 0) {
-            remainingEl.textContent = 'Verfügbar: ' + remaining.toFixed(2).replace('.', ',') + ' €' + (amount > remaining ? ' (Betrag zu hoch)' : '');
+            const tooHigh = signedEffect > remaining + 0.0001;
+            remainingEl.textContent = 'Verfügbar: ' + remaining.toFixed(2).replace('.', ',') + ' €' + (tooHigh ? ' (Betrag zu hoch)' : '');
         } else {
             remainingEl.textContent = 'Alle Beträge verknüpft';
         }
     }
 
     if (submitBtn) {
-        submitBtn.disabled = amount > remaining || remaining <= 0;
+        submitBtn.disabled = !hasSelection || amount <= 0 || signedEffect > remaining + 0.0001;
     }
 }
 

@@ -19,6 +19,7 @@ if (isset($_SESSION['show_privacy_policy_only'])) {
 }
 
 $page_title = 'Dashboard';
+ensure_expense_request_support();
 include 'includes/header.php';
 
 // Check if user is a supporter - if so, redirect to profile
@@ -34,7 +35,8 @@ $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_p
                       has_permission('board.php') || has_permission('messages.php') || 
                       has_permission('kassenpruefer_assignments.php') || has_permission('approve_registrations.php') || 
                       has_permission('settings.php') || has_permission('check_periods.php') || 
-                      has_permission('selfservice.php') || has_permission('calendar.php');
+                      has_permission('selfservice.php') || has_permission('calendar.php') ||
+                      has_permission('expense_requests.php') || has_permission('financial_report.php');
 ?>
 
 <?php if (!$has_any_permission): ?>
@@ -53,21 +55,6 @@ $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_p
         <?php
         $db = getDBConnection();
         
-        // Cash transactions count and balance
-        $stmt = $db->query("SELECT COUNT(*) as count FROM transactions");
-        $trans_count = $stmt->fetch()['count'];
-        $stmt = $db->query("SELECT COALESCE(SUM(amount), 0) as total FROM transactions");
-        $balance = $stmt->fetch()['total'];
-        
-        echo '<div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Transaktionen</div>
-                <div class="stat-number">' . $trans_count . '</div>
-              </div>
-              <div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Nettosaldo</div>
-                <div class="stat-number" style="color: ' . ($balance >= 0 ? '#4caf50' : '#f44336') . '; font-size: 2rem; font-weight: bold;">' . number_format($balance, 2, ',', '.') . ' €</div>
-              </div>';
-        
         // Member statistics
         $stmt = $db->query("SELECT 
                             COUNT(*) as total,
@@ -83,52 +70,6 @@ $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_p
               <div class="stat-box">
                 <div class="stat-label" style="font-weight: bold;">Förderer</div>
                 <div class="stat-number">' . $member_stats['supporters'] . '</div>
-              </div>';
-        
-        // Outstanding obligations for ACTIVE members
-        $stmt = $db->query("
-            SELECT 
-                COUNT(*) as count,
-                COALESCE(SUM(fee_amount - paid_amount), 0) as total_outstanding
-            FROM member_fee_obligations o
-            INNER JOIN members m ON o.member_id = m.id
-            WHERE m.active = 1 
-                AND m.member_type = 'active'
-                AND o.status IN ('open', 'partial')
-        ");
-        $active_outstanding = $stmt->fetch();
-        
-        echo '<div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Offene Forderungen (Aktive)</div>
-                <div class="stat-number" style="color: ' . ($active_outstanding['count'] > 0 ? '#ff9800' : '#4caf50') . '">' . $active_outstanding['count'] . '</div>
-              </div>';
-        
-        echo '<div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Ausstehend (Aktive)</div>
-                <div class="stat-number" style="color: ' . ($active_outstanding['total_outstanding'] > 0 ? '#ff9800' : '#4caf50') . '; font-size: 1.8rem; font-weight: bold;">' . number_format($active_outstanding['total_outstanding'], 2, ',', '.') . ' €</div>
-              </div>';
-        
-        // Outstanding obligations for SUPPORTER members
-        $stmt = $db->query("
-            SELECT 
-                COUNT(*) as count,
-                COALESCE(SUM(fee_amount - paid_amount), 0) as total_outstanding
-            FROM member_fee_obligations o
-            INNER JOIN members m ON o.member_id = m.id
-            WHERE m.active = 1 
-                AND m.member_type = 'supporter'
-                AND o.status IN ('open', 'partial')
-        ");
-        $supporter_outstanding = $stmt->fetch();
-        
-        echo '<div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Offene Forderungen (Förderer)</div>
-                <div class="stat-number" style="color: ' . ($supporter_outstanding['count'] > 0 ? '#ff9800' : '#4caf50') . '">' . $supporter_outstanding['count'] . '</div>
-              </div>';
-        
-        echo '<div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Ausstehend (Förderer)</div>
-                <div class="stat-number" style="color: ' . ($supporter_outstanding['total_outstanding'] > 0 ? '#ff9800' : '#4caf50') . '; font-size: 1.8rem; font-weight: bold;">' . number_format($supporter_outstanding['total_outstanding'], 2, ',', '.') . ' €</div>
               </div>';
         
         // Messages count
@@ -198,11 +139,13 @@ $perm_details = [
     'approve_registrations.php' => ['icon' => '👤', 'title' => 'Registrierungen', 'desc' => 'Neue Benutzerregistrierungen genehmigen', 'url' => 'approve_registrations.php'],
     'settings.php' => ['icon' => '⚙️', 'title' => 'Einstellungen', 'desc' => 'System- und Benutzereinstellungen', 'url' => 'settings.php'],
     'kontofuehrung.php' => ['icon' => '💰', 'title' => 'Kontoführung', 'desc' => 'Kassenprüfung und Transaktionsverwaltung', 'url' => 'kontofuehrung.php'],
+    'financial_report.php' => ['icon' => '📈', 'title' => 'Finanzbericht', 'desc' => 'Kennzahlen, Zeitverlauf und Kategorien-Auswertung', 'url' => 'financial_report.php'],
     'members.php' => ['icon' => '👤', 'title' => 'Mitglieder', 'desc' => 'Mitgliederverwaltung und Beiträge', 'url' => 'members.php'],
     'generate_obligations.php' => ['icon' => '📋', 'title' => 'Beitragsforderungen', 'desc' => 'Jahresbeiträge generieren und verwalten', 'url' => 'generate_obligations.php'],
     'items.php' => ['icon' => '📦', 'title' => 'Artikel', 'desc' => 'Artikel und Gegenstände verwalten', 'url' => 'items.php'],
     'outstanding_obligations.php' => ['icon' => '🔗', 'title' => 'Offene Forderungen', 'desc' => 'Mitgliedsbeiträge und Artikel-Verpflichtungen verwalten', 'url' => 'outstanding_obligations.php'],
     'payment_reminders.php' => ['icon' => '📧', 'title' => 'Zahlungserinnerungen', 'desc' => 'Zahlungserinnerungen versenden und Versand-Historie', 'url' => 'payment_reminders.php'],
+    'expense_requests.php' => ['icon' => '🧾', 'title' => 'Belege Einreichen', 'desc' => 'Auslagen mobil einreichen und Erstattungen verfolgen', 'url' => 'expense_requests.php'],
     'calendar.php' => ['icon' => '📆', 'title' => 'Kalender', 'desc' => 'Gemeinsamen Kalender verwalten', 'url' => 'calendar.php'],
     'check_periods.php' => ['icon' => '✅', 'title' => 'Prüfperioden', 'desc' => 'Kassenprüfung nach Perioden durchführen', 'url' => 'check_periods.php'],
 ];
@@ -229,25 +172,6 @@ $perm_details = [
         <?php endif; endforeach; ?>
     </div>
     
-    <!-- Disabled permissions (grayed out) -->
-    <div style="margin-top: 30px; padding: 20px; background: #f5f5f5; border-radius: 8px; opacity: 0.6;">
-        <p style="color: #999; font-size: 13px; margin-bottom: 15px; font-style: italic;">Verfügbare Berechtigungen (nicht aktiviert):</p>
-        <div class="dashboard-grid">
-            <?php foreach ($perms as $perm): 
-                if (!isset($perm_details[$perm['name']])) continue;
-                if (!has_permission($perm['name'])):
-                    $detail = $perm_details[$perm['name']];
-            ?>
-            <div class="dashboard-card" style="opacity: 0.5; pointer-events: none; filter: grayscale(100%);">
-                <div class="card-icon"><?php echo $detail['icon']; ?></div>
-                <h3><?php echo $detail['title']; ?></h3>
-                <p><?php echo $detail['desc']; ?></p>
-                <button class="btn btn-primary" disabled>Öffnen</button>
-                <span class="card-tech-info" title="Required Page: <?php echo $perm['name']; ?>"><i class="fas fa-info-circle"></i> <?php echo $perm['name']; ?></span>
-            </div>
-            <?php endif; endforeach; ?>
-        </div>
-    </div>
 </div>
 <?php endforeach; ?>
 
