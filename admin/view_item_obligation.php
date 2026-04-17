@@ -67,7 +67,7 @@ $stmt = $db->prepare("SELECT oi.*, i.name as item_name
 $stmt->execute([':obligation_id' => $id]);
 $items = $stmt->fetchAll();
 
-$outstanding = $obligation['total_amount'] - $obligation['paid_amount'];
+$outstanding = (float) $obligation['total_amount'] - (float) $obligation['paid_amount'];
 
 $expense_request = null;
 $expense_request_docs = [];
@@ -109,6 +109,47 @@ try {
     $expense_request_docs = [];
     $obligation_docs = [];
     $linked_transaction_docs = [];
+}
+
+$status_badge_class = 'badge-danger';
+$status_icon = 'fas fa-exclamation-triangle';
+$status_label = 'Offen';
+
+if ($expense_request) {
+    switch ($expense_request['status']) {
+        case 'paid':
+            $status_badge_class = 'badge-success';
+            $status_icon = 'fas fa-check-circle';
+            $status_label = 'Ausgezahlt';
+            break;
+        case 'approved':
+            $status_badge_class = 'badge-primary';
+            $status_icon = 'fas fa-thumbs-up';
+            $status_label = 'Genehmigt';
+            break;
+        case 'rejected':
+            $status_badge_class = 'badge-secondary';
+            $status_icon = 'fas fa-ban';
+            $status_label = 'Abgelehnt';
+            break;
+        default:
+            $status_badge_class = 'badge-warning';
+            $status_icon = 'fas fa-clock';
+            $status_label = 'Eingereicht';
+            break;
+    }
+} elseif (($obligation['status'] ?? '') === 'cancelled') {
+    $status_badge_class = 'badge-secondary';
+    $status_icon = 'fas fa-ban';
+    $status_label = 'Storniert';
+} elseif ($outstanding <= 0) {
+    $status_badge_class = 'badge-success';
+    $status_icon = 'fas fa-check-circle';
+    $status_label = 'Bezahlt';
+} elseif ((float) $obligation['paid_amount'] > 0) {
+    $status_badge_class = 'badge-warning';
+    $status_icon = 'fas fa-clock';
+    $status_label = 'Teilzahlung';
 }
 
 include 'includes/header.php';
@@ -173,21 +214,9 @@ include 'includes/header.php';
             <div>
                 <h3 style="margin-top: 0;">Status</h3>
                 <p style="margin: 0;">
-                    <?php 
-                    $outstanding = $obligation['total_amount'] - $obligation['paid_amount'];
-                    if ($outstanding == 0): ?>
-                        <span class="badge badge-success" style="font-size: 1rem; padding: 0.5rem 1rem;">
-                            <i class="fas fa-check-circle"></i> Bezahlt
-                        </span>
-                    <?php elseif ($obligation['paid_amount'] > 0): ?>
-                        <span class="badge badge-warning" style="font-size: 1rem; padding: 0.5rem 1rem;">
-                            <i class="fas fa-clock"></i> Teilzahlung
-                        </span>
-                    <?php else: ?>
-                        <span class="badge badge-danger" style="font-size: 1rem; padding: 0.5rem 1rem;">
-                            <i class="fas fa-exclamation-triangle"></i> Offen
-                        </span>
-                    <?php endif; ?>
+                    <span class="badge <?= htmlspecialchars($status_badge_class) ?>" style="font-size: 1rem; padding: 0.5rem 1rem;">
+                        <i class="<?= htmlspecialchars($status_icon) ?>"></i> <?= htmlspecialchars($status_label) ?>
+                    </span>
                 </p>
                 <?php if (!empty($obligation['category_name'])): ?>
                     <p style="color: #666; margin: 0.5rem 0 0 0;">

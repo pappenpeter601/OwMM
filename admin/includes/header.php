@@ -22,6 +22,13 @@
     <?php endif; ?>
 </head>
 <body>
+    <div class="mobile-topbar">
+        <button type="button" class="mobile-menu-toggle" aria-label="Navigation öffnen"
+                onclick="document.querySelector('.sidebar')?.classList.toggle('active'); document.querySelector('.sidebar-overlay')?.classList.toggle('active');">
+            <i class="fas fa-bars"></i> Menü
+        </button>
+    </div>
+    <div class="sidebar-overlay" onclick="document.querySelector('.sidebar')?.classList.remove('active'); this.classList.remove('active');"></div>
     <div class="admin-wrapper">
         <aside class="sidebar">
             <div class="sidebar-header">

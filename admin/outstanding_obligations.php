@@ -17,7 +17,11 @@ if (!is_logged_in() || !has_permission('outstanding_obligations.php')) {
 ensure_financial_reporting_support();
 
 $year = $_GET['year'] ?? date('Y');
-$tab = $_GET['tab'] ?? 'fees'; // 'fees' or 'items'
+$tab = $_GET['tab'] ?? 'fees'; // legacy compatibility
+$scope_filter = $_GET['scope'] ?? (($tab === 'items' || $tab === 'fees') ? $tab : 'all');
+if (!in_array($scope_filter, ['all', 'fees', 'items', 'receivables', 'reimbursements'], true)) {
+    $scope_filter = 'all';
+}
 $search = $_GET['search'] ?? '';
 $status_filter = $_GET['status'] ?? ''; // filter for fees/items and reimbursement review states
 $member_type_filter = $_GET['member_type'] ?? ''; // 'active', 'supporter', 'pensioner'
@@ -36,7 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
     $obligationId = (int) ($_POST['obligation_id'] ?? 0);
     $obligationType = $_POST['obligation_type'] ?? '';
     $categoryId = ($_POST['category_id'] ?? '') !== '' ? (int) $_POST['category_id'] : null;
-    $targetTab = $_POST['target_tab'] ?? $tab;
+    $targetScope = $_POST['target_scope'] ?? $scope_filter;
 
     try {
         if ($obligationId <= 0) {
@@ -62,7 +66,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
 
     $redirectParams = [
         'year' => $year,
-        'tab' => $targetTab
+        'scope' => $targetScope
     ];
     if ($search !== '') {
         $redirectParams['search'] = $search;
@@ -95,7 +99,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'revie
 
     $redirectParams = [
         'year' => $year,
-        'tab' => 'items'
+        'scope' => 'reimbursements'
+    ];
+    if ($search !== '') {
+        $redirectParams['search'] = $search;
+    }
+    if ($status_filter !== '') {
+        $redirectParams['status'] = $status_filter;
+    }
+    if ($member_type_filter !== '') {
+        $redirectParams['member_type'] = $member_type_filter;
+    }
+    if ($category_filter !== '') {
+        $redirectParams['category_id'] = $category_filter;
+    }
+
+    redirect('outstanding_obligations.php?' . http_build_query($redirectParams));
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'cancel_item_obligation') {
+    $obligationId = (int) ($_POST['obligation_id'] ?? 0);
+
+    try {
+        if ($obligationId <= 0) {
+            throw new Exception('Forderung nicht gefunden.');
+        }
+
+        $stmt = $db->prepare("SELECT io.id, io.status, io.notes, io.paid_amount, er.id AS expense_request_id
+                              FROM item_obligations io
+                              LEFT JOIN expense_requests er ON er.linked_item_obligation_id = io.id
+                              WHERE io.id = :id
+                              LIMIT 1");
+        $stmt->execute([':id' => $obligationId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) {
+            throw new Exception('Forderung nicht gefunden.');
+        }
+        if (!empty($row['expense_request_id'])) {
+            throw new Exception('Erstattungen werden über den Erstattungsstatus verwaltet, nicht per Storno.');
+        }
+        if (($row['status'] ?? '') === 'paid') {
+            throw new Exception('Bereits bezahlte Forderungen können hier nicht storniert werden.');
+        }
+        if (($row['status'] ?? '') === 'cancelled') {
+            throw new Exception('Die Forderung ist bereits storniert.');
+        }
+
+        $noteSuffix = "[STORNIERT am " . date('d.m.Y H:i') . "]";
+        $updatedNotes = trim((string) ($row['notes'] ?? ''));
+        $updatedNotes = $updatedNotes !== '' ? $updatedNotes . "\n" . $noteSuffix : $noteSuffix;
+
+        $stmt = $db->prepare("UPDATE item_obligations SET status = 'cancelled', notes = :notes WHERE id = :id");
+        $stmt->execute([
+            ':notes' => $updatedNotes,
+            ':id' => $obligationId
+        ]);
+
+        $_SESSION['success'] = 'Forderung wurde storniert.';
+    } catch (Exception $e) {
+        $_SESSION['error'] = $e->getMessage();
+    }
+
+    $redirectParams = [
+        'year' => $year,
+        'scope' => $scope_filter
     ];
     if ($search !== '') {
         $redirectParams['search'] = $search;
@@ -208,6 +276,19 @@ try {
                                    ISNULL(io.due_date) ASC, io.due_date ASC, io.created_at DESC");
     $stmt->execute();
     $open_item_obligations = $stmt->fetchAll();
+
+    $selectedYear = (int) $year;
+    $open_item_obligations = array_filter($open_item_obligations, function($obl) use ($selectedYear) {
+        $referenceDate = $obl['due_date']
+            ?: ($obl['expense_requested_at'] ?? null)
+            ?: ($obl['created_at'] ?? null);
+
+        if (empty($referenceDate)) {
+            return true;
+        }
+
+        return (int) date('Y', strtotime($referenceDate)) === $selectedYear;
+    });
     
     // Apply search filter to item obligations
     if (!empty($search)) {
@@ -250,11 +331,37 @@ try {
         });
     }
 
-    // Calculate totals from ALL item obligations (including paid) 
-    $stmt = $db->prepare("SELECT total_amount, paid_amount, (total_amount - paid_amount) as outstanding
-                          FROM item_obligations");
+    if ($scope_filter === 'receivables') {
+        $open_item_obligations = array_filter($open_item_obligations, function($obl) {
+            return empty($obl['expense_request_id']);
+        });
+    } elseif ($scope_filter === 'reimbursements') {
+        $open_item_obligations = array_filter($open_item_obligations, function($obl) {
+            return !empty($obl['expense_request_id']);
+        });
+    }
+
+    // Calculate totals from ALL item obligations in the selected year (including paid)
+    $stmt = $db->prepare("SELECT io.total_amount,
+                                 io.paid_amount,
+                                 (io.total_amount - io.paid_amount) AS outstanding,
+                                 io.due_date,
+                                 io.created_at,
+                                 er.created_at AS expense_requested_at
+                          FROM item_obligations io
+                          LEFT JOIN expense_requests er ON er.linked_item_obligation_id = io.id");
     $stmt->execute();
-    $all_item_obligations = $stmt->fetchAll();
+    $all_item_obligations = array_filter($stmt->fetchAll(PDO::FETCH_ASSOC), function($obl) use ($selectedYear) {
+        $referenceDate = $obl['due_date']
+            ?: ($obl['expense_requested_at'] ?? null)
+            ?: ($obl['created_at'] ?? null);
+
+        if (empty($referenceDate)) {
+            return true;
+        }
+
+        return (int) date('Y', strtotime($referenceDate)) === $selectedYear;
+    });
     
     $item_total_amount = array_sum(array_column($all_item_obligations, 'total_amount'));
     $item_total_paid = array_sum(array_column($all_item_obligations, 'paid_amount'));
@@ -280,7 +387,7 @@ include 'includes/header.php';
             <i class="fas fa-arrow-left"></i> Zurück
         </a>
         <h1 style="display: inline-block; margin-left: 1rem;">
-            Offene Forderungen
+            Offene Verpflichtungen
         </h1>
         <div style="float: right; display: flex; gap: 0.5rem; flex-wrap: wrap;">
             <a href="expense_requests.php" class="btn btn-secondary">
@@ -295,7 +402,7 @@ include 'includes/header.php';
 
 <!-- Summary Cards -->
 <div class="stats-grid">
-    <?php if ($tab === 'fees'): ?>
+    <?php if ($showFeesSection): ?>
         <div class="stat-card">
             <div class="stat-icon" style="background: #f44336;">
                 <i class="fas fa-exclamation-triangle"></i>
@@ -335,7 +442,9 @@ include 'includes/header.php';
                 <div class="stat-label">Bereits eingegangen</div>
             </div>
         </div>
-    <?php else: ?>
+    <?php endif; ?>
+
+    <?php if ($showItemsSection): ?>
         <div class="stat-card">
             <div class="stat-icon" style="background: #f44336;">
                 <i class="fas fa-exclamation-triangle"></i>
@@ -393,6 +502,16 @@ include 'includes/header.php';
                 </select>
             </div>
             <div class="form-group">
+                <label for="scope">Bereich</label>
+                <select id="scope" name="scope">
+                    <option value="all" <?= $scope_filter === 'all' ? 'selected' : '' ?>>Alles anzeigen</option>
+                    <option value="fees" <?= $scope_filter === 'fees' ? 'selected' : '' ?>>Nur Mitgliedsbeiträge</option>
+                    <option value="items" <?= $scope_filter === 'items' ? 'selected' : '' ?>>Forderungen & Erstattungen</option>
+                    <option value="receivables" <?= $scope_filter === 'receivables' ? 'selected' : '' ?>>Nur Forderungen</option>
+                    <option value="reimbursements" <?= $scope_filter === 'reimbursements' ? 'selected' : '' ?>>Nur Erstattungen</option>
+                </select>
+            </div>
+            <div class="form-group">
                 <label for="member_type">Mitgliedertyp</label>
                 <select id="member_type" name="member_type">
                     <option value="">Alle Typen</option>
@@ -433,23 +552,35 @@ include 'includes/header.php';
             <div class="form-group" style="min-width: 280px; flex: 1 1 100%;">
                 <label for="search">Suche</label>
                 <input type="text" id="search" name="search" value="<?= htmlspecialchars($search) ?>" 
-                       placeholder="Mitgliedsname oder Mitgliedsnummer..." style="width: 100%;">
+                       placeholder="Name, Mitgliedsnummer, Referenz oder Notiz..." style="width: 100%;">
             </div>
         </div>
         
         <!-- Row 3: Buttons -->
         <div class="filter-row" style="display: flex; justify-content: flex-end; gap: 0.5rem; width: 100%;">
             <button type="submit" class="btn btn-secondary">Filtern</button>
-            <a href="outstanding_obligations.php?tab=<?= htmlspecialchars($tab) ?>" class="btn btn-secondary">Zurücksetzen</a>
+            <a href="outstanding_obligations.php" class="btn btn-secondary">Zurücksetzen</a>
         </div>
     </form>
 </div>
 
 <?php 
+$showFeesSection = in_array($scope_filter, ['all', 'fees'], true);
+$showItemsSection = in_array($scope_filter, ['all', 'items', 'receivables', 'reimbursements'], true);
+
 // Build active filter hints for UI
 $active_filters = [];
 if ($year != date('Y')) {
     $active_filters[] = 'Jahr: ' . $year;
+}
+if ($scope_filter !== 'all') {
+    $scope_labels = [
+        'fees' => 'Mitgliedsbeiträge',
+        'items' => 'Forderungen & Erstattungen',
+        'receivables' => 'Nur Forderungen',
+        'reimbursements' => 'Nur Erstattungen'
+    ];
+    $active_filters[] = 'Bereich: ' . ($scope_labels[$scope_filter] ?? $scope_filter);
 }
 if ($member_type_filter !== '') {
     $member_type_labels = ['active' => 'Einsatzeinheit', 'supporter' => 'Förderer', 'pensioner' => 'Altersabteilung'];
@@ -473,26 +604,13 @@ if ($search !== '') {
 </div>
 <?php endif; ?>
 
-<!-- Tab Navigation -->
-<div class="tabs" style="margin: 1rem 0; border-bottom: 2px solid #e0e0e0; display: flex; gap: 0;">
-    <a href="?year=<?= $year ?>&tab=fees&search=<?= urlencode($search) ?>&status=<?= urlencode($status_filter) ?>&member_type=<?= urlencode($member_type_filter) ?>&category_id=<?= urlencode($category_filter) ?>" 
-       class="tab-button" style="padding: 0.75rem 1.5rem; border-bottom: 3px solid transparent; text-decoration: none; font-weight: 600; color: #666; <?= $tab === 'fees' ? 'border-bottom-color: #2196f3; color: #2196f3;' : '' ?>">
-        <i class="fas fa-file-invoice-dollar"></i> Mitgliedsbeiträge
-    </a>
-    <a href="?year=<?= $year ?>&tab=items&search=<?= urlencode($search) ?>&status=<?= urlencode($status_filter) ?>&member_type=<?= urlencode($member_type_filter) ?>&category_id=<?= urlencode($category_filter) ?>" 
-       class="tab-button" style="padding: 0.75rem 1.5rem; border-bottom: 3px solid transparent; text-decoration: none; font-weight: 600; color: #666; <?= $tab === 'items' ? 'border-bottom-color: #2196f3; color: #2196f3;' : '' ?>">
-        <i class="fas fa-boxes"></i> Forderungen & Erstattungen
-    </a>
-</div>
-
 <!-- Outstanding Obligations Table -->
+<?php if ($showFeesSection): ?>
 <div class="card">
     <div class="card-header">
-        <h2><?= $tab === 'fees' ? 'Offene Mitgliedsbeiträge' : 'Allgemeine Forderungen & Erstattungsanträge' ?></h2>
+        <h2>Offene Mitgliedsbeiträge</h2>
     </div>
     <div class="card-body">
-        <?php if ($tab === 'fees'): ?>
-            <!-- Fee Obligations Tab -->
             <?php if (empty($open_obligations)): ?>
                 <div class="info-box success">
                     <p><i class="fas fa-check-circle"></i> <strong>Alle Beiträge für <?= $year ?> wurden bezahlt!</strong></p>
@@ -546,7 +664,7 @@ if ($search !== '') {
                                         <input type="hidden" name="action" value="update_obligation_category">
                                         <input type="hidden" name="obligation_type" value="fee">
                                         <input type="hidden" name="obligation_id" value="<?= (int)$obl['id'] ?>">
-                                        <input type="hidden" name="target_tab" value="fees">
+                                        <input type="hidden" name="target_scope" value="<?= htmlspecialchars($scope_filter) ?>">
                                         <select name="category_id" style="min-width: 150px; padding: 0.3rem 0.45rem; border: 1px solid #ddd; border-radius: 4px;">
                                             <option value="">Ohne Kategorie</option>
                                             <?php foreach ($categories as $cat): ?>
@@ -604,9 +722,16 @@ if ($search !== '') {
                     </button>
                 </div>
             <?php endif; ?>
-        
-        <?php else: ?>
-            <!-- Item Obligations Tab -->
+    </div>
+</div>
+<?php endif; ?>
+
+<?php if ($showItemsSection): ?>
+<div class="card" style="margin-top: 1rem;">
+    <div class="card-header">
+        <h2>Forderungen & Erstattungen</h2>
+    </div>
+    <div class="card-body">
             <?php if (empty($open_item_obligations)): ?>
                 <div class="info-box success">
                     <p><i class="fas fa-check-circle"></i> <strong>Keine offenen Forderungen!</strong></p>
@@ -679,7 +804,7 @@ if ($search !== '') {
                                         <input type="hidden" name="action" value="update_obligation_category">
                                         <input type="hidden" name="obligation_type" value="item">
                                         <input type="hidden" name="obligation_id" value="<?= (int)$obl['id'] ?>">
-                                        <input type="hidden" name="target_tab" value="items">
+                                        <input type="hidden" name="target_scope" value="<?= htmlspecialchars($scope_filter) ?>">
                                         <select name="category_id" style="min-width: 150px; padding: 0.3rem 0.45rem; border: 1px solid #ddd; border-radius: 4px;">
                                             <option value="">Ohne Kategorie</option>
                                             <?php foreach ($categories as $cat): ?>
@@ -735,10 +860,26 @@ if ($search !== '') {
                                     <?php endif; ?>
                                 </td>
                                 <td class="action-buttons">
-                                    <a href="view_item_obligation.php?id=<?= $obl['id'] ?>" 
-                                       class="btn btn-sm btn-secondary" title="Details anzeigen">
-                                        <i class="fas fa-eye"></i>
-                                    </a>
+                                    <div style="display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center;">
+                                        <a href="view_item_obligation.php?id=<?= $obl['id'] ?>" 
+                                           class="btn btn-sm btn-secondary" title="Details anzeigen">
+                                            <i class="fas fa-eye"></i> Details
+                                        </a>
+                                        <?php if (!empty($obl['member_id'])): ?>
+                                            <a href="members.php?edit=<?= (int) $obl['member_id'] ?>" class="btn btn-sm btn-info" title="Mitglied anzeigen">
+                                                <i class="fas fa-user"></i> Mitglied
+                                            </a>
+                                        <?php endif; ?>
+                                        <?php if (!$is_expense_request && ($obl['status'] ?? '') !== 'cancelled' && (float) $obl['paid_amount'] < (float) $obl['total_amount']): ?>
+                                            <form method="POST" style="display: inline-block; margin: 0;" onsubmit="return confirm('Forderung wirklich stornieren?');">
+                                                <input type="hidden" name="action" value="cancel_item_obligation">
+                                                <input type="hidden" name="obligation_id" value="<?= (int) $obl['id'] ?>">
+                                                <button type="submit" class="btn btn-sm btn-danger" title="Stornieren">
+                                                    <i class="fas fa-ban"></i> Storno
+                                                </button>
+                                            </form>
+                                        <?php endif; ?>
+                                    </div>
                                     <?php if ($is_expense_request && in_array($request_status, ['submitted', 'approved'], true)): ?>
                                         <form method="POST" style="display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.5rem; min-width: 220px;">
                                             <input type="hidden" name="action" value="review_expense_request">
@@ -775,9 +916,9 @@ if ($search !== '') {
                     </button>
                 </div>
             <?php endif; ?>
-        <?php endif; ?>
     </div>
 </div>
+<?php endif; ?>
 
 <style>
 .tabs {

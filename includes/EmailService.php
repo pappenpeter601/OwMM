@@ -56,7 +56,7 @@ class EmailService {
             } else {
                 throw new Exception("Email configuration not found in database");
             }
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             error_log("Failed to load email config: " . $e->getMessage());
             throw $e;
         }
@@ -91,7 +91,7 @@ class EmailService {
             );
             
             return ['success' => true, 'message' => 'Magic link email erfolgreich gesendet'];
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             error_log("Magic link email error: " . $e->getMessage());
             return ['success' => false, 'error' => $e->getMessage()];
         }

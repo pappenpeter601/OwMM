@@ -22,7 +22,7 @@ $error_message = '';
 // Handle magic link request
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        $email = trim($_POST['email']);
+        $email = trim((string) ($_POST['email'] ?? ''));
         
         if (empty($email)) {
             throw new Exception("Bitte geben Sie Ihre E-Mail-Adresse ein.");
@@ -113,8 +113,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $success_message = "Ein Magic Link wurde an Ihre E-Mail-Adresse gesendet. Der Link ist 15 Minuten gültig.";
         }
         
-    } catch (Exception $e) {
-        $error_message = $e->getMessage();
+    } catch (Throwable $e) {
+        error_log('Magic link request failed: ' . $e->getMessage());
+        $error_message = 'Der Magic Link konnte aktuell nicht angefordert werden. Bitte versuchen Sie es erneut oder wenden Sie sich an einen Administrator.';
     }
 }
 

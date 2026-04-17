@@ -55,21 +55,6 @@ $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_p
         <?php
         $db = getDBConnection();
         
-        // Cash transactions count and balance
-        $stmt = $db->query("SELECT COUNT(*) as count FROM transactions");
-        $trans_count = $stmt->fetch()['count'];
-        $stmt = $db->query("SELECT COALESCE(SUM(amount), 0) as total FROM transactions");
-        $balance = $stmt->fetch()['total'];
-        
-        echo '<div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Transaktionen</div>
-                <div class="stat-number">' . $trans_count . '</div>
-              </div>
-              <div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Nettosaldo</div>
-                <div class="stat-number" style="color: ' . ($balance >= 0 ? '#4caf50' : '#f44336') . '; font-size: 2rem; font-weight: bold;">' . number_format($balance, 2, ',', '.') . ' €</div>
-              </div>';
-        
         // Member statistics
         $stmt = $db->query("SELECT 
                             COUNT(*) as total,
@@ -85,52 +70,6 @@ $has_any_permission = is_admin() || has_permission('kontofuehrung.php') || has_p
               <div class="stat-box">
                 <div class="stat-label" style="font-weight: bold;">Förderer</div>
                 <div class="stat-number">' . $member_stats['supporters'] . '</div>
-              </div>';
-        
-        // Outstanding obligations for ACTIVE members
-        $stmt = $db->query("
-            SELECT 
-                COUNT(*) as count,
-                COALESCE(SUM(fee_amount - paid_amount), 0) as total_outstanding
-            FROM member_fee_obligations o
-            INNER JOIN members m ON o.member_id = m.id
-            WHERE m.active = 1 
-                AND m.member_type = 'active'
-                AND o.status IN ('open', 'partial')
-        ");
-        $active_outstanding = $stmt->fetch();
-        
-        echo '<div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Offene Forderungen (Aktive)</div>
-                <div class="stat-number" style="color: ' . ($active_outstanding['count'] > 0 ? '#ff9800' : '#4caf50') . '">' . $active_outstanding['count'] . '</div>
-              </div>';
-        
-        echo '<div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Ausstehend (Aktive)</div>
-                <div class="stat-number" style="color: ' . ($active_outstanding['total_outstanding'] > 0 ? '#ff9800' : '#4caf50') . '; font-size: 1.8rem; font-weight: bold;">' . number_format($active_outstanding['total_outstanding'], 2, ',', '.') . ' €</div>
-              </div>';
-        
-        // Outstanding obligations for SUPPORTER members
-        $stmt = $db->query("
-            SELECT 
-                COUNT(*) as count,
-                COALESCE(SUM(fee_amount - paid_amount), 0) as total_outstanding
-            FROM member_fee_obligations o
-            INNER JOIN members m ON o.member_id = m.id
-            WHERE m.active = 1 
-                AND m.member_type = 'supporter'
-                AND o.status IN ('open', 'partial')
-        ");
-        $supporter_outstanding = $stmt->fetch();
-        
-        echo '<div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Offene Forderungen (Förderer)</div>
-                <div class="stat-number" style="color: ' . ($supporter_outstanding['count'] > 0 ? '#ff9800' : '#4caf50') . '">' . $supporter_outstanding['count'] . '</div>
-              </div>';
-        
-        echo '<div class="stat-box">
-                <div class="stat-label" style="font-weight: bold;">Ausstehend (Förderer)</div>
-                <div class="stat-number" style="color: ' . ($supporter_outstanding['total_outstanding'] > 0 ? '#ff9800' : '#4caf50') . '; font-size: 1.8rem; font-weight: bold;">' . number_format($supporter_outstanding['total_outstanding'], 2, ',', '.') . ' €</div>
               </div>';
         
         // Messages count
@@ -233,25 +172,6 @@ $perm_details = [
         <?php endif; endforeach; ?>
     </div>
     
-    <!-- Disabled permissions (grayed out) -->
-    <div style="margin-top: 30px; padding: 20px; background: #f5f5f5; border-radius: 8px; opacity: 0.6;">
-        <p style="color: #999; font-size: 13px; margin-bottom: 15px; font-style: italic;">Verfügbare Berechtigungen (nicht aktiviert):</p>
-        <div class="dashboard-grid">
-            <?php foreach ($perms as $perm): 
-                if (!isset($perm_details[$perm['name']])) continue;
-                if (!has_permission($perm['name'])):
-                    $detail = $perm_details[$perm['name']];
-            ?>
-            <div class="dashboard-card" style="opacity: 0.5; pointer-events: none; filter: grayscale(100%);">
-                <div class="card-icon"><?php echo $detail['icon']; ?></div>
-                <h3><?php echo $detail['title']; ?></h3>
-                <p><?php echo $detail['desc']; ?></p>
-                <button class="btn btn-primary" disabled>Öffnen</button>
-                <span class="card-tech-info" title="Required Page: <?php echo $perm['name']; ?>"><i class="fas fa-info-circle"></i> <?php echo $perm['name']; ?></span>
-            </div>
-            <?php endif; endforeach; ?>
-        </div>
-    </div>
 </div>
 <?php endforeach; ?>
 
