@@ -161,8 +161,8 @@ include 'includes/header.php';
 
             <div class="form-group">
                 <label for="documents">Belege hochladen *</label>
-                <input type="file" id="documents" name="documents[]" class="form-control" accept="image/*,application/pdf" capture="environment" multiple required>
-                <small>Mobil können Sie direkt ein Foto aufnehmen. Erlaubt sind PDF, JPG, PNG und WEBP bis 5MB pro Datei.</small>
+                <input type="file" id="documents" name="documents[]" class="form-control" accept="image/*,application/pdf" multiple required>
+                <small>Auf Mobilgeräten können Sie nun flexibler zwischen Kamera, Fotomediathek und Dateien wählen. Erlaubt sind PDF, JPG, PNG und WEBP bis 5MB pro Datei.</small>
                 <div id="file-preview" class="file-preview"></div>
             </div>
 
