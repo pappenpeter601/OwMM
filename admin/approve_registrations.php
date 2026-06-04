@@ -34,24 +34,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             throw new Exception("Diese Anfrage wurde bereits bearbeitet.");
         }
         
+        if (empty($request['email_verified_at'])) {
+            throw new Exception("Die E-Mail-Adresse dieser Anfrage wurde noch nicht verifiziert.");
+        }
+        
         if ($action === 'approve') {
             // Begin transaction
             $pdo->beginTransaction();
+            
+            $firstName = validate_person_name($request['first_name'], 'Vorname');
+            $lastName = validate_person_name($request['last_name'], 'Nachname');
             
             // Create user account
             $stmt = $pdo->prepare("
                 INSERT INTO users (username, first_name, last_name, email, auth_method, email_verified, is_admin, created_at)
                 VALUES (?, ?, ?, ?, 'magic_link', 1, 0, NOW())
             ");
-            $username = strtolower($request['first_name'] . '.' . $request['last_name']);
+            $username = strtolower($firstName . '.' . $lastName);
             $stmt->execute([
                 $username,
-                $request['first_name'],
-                $request['last_name'],
+                $firstName,
+                $lastName,
                 $request['email']
             ]);
-            
-            $user_id = $pdo->lastInsertId();
             
             // Delete registration request (user is now created, no need to keep it)
             $stmt = $pdo->prepare("DELETE FROM registration_requests WHERE id = ?");
@@ -102,7 +107,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 // Get all pending registration requests
 $stmt = $pdo->query("
     SELECT * FROM registration_requests 
-    WHERE status = 'pending'
+    WHERE status = 'pending' AND email_verified_at IS NOT NULL
     ORDER BY created_at DESC
 ");
 $pending_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);

@@ -16,9 +16,9 @@ $error_message = '';
 // Handle registration form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        $email = trim($_POST['email']);
-        $first_name = trim($_POST['first_name']);
-        $last_name = trim($_POST['last_name']);
+        $email = trim((string)($_POST['email'] ?? ''));
+        $first_name = trim((string)($_POST['first_name'] ?? ''));
+        $last_name = trim((string)($_POST['last_name'] ?? ''));
         
         // Validate input
         if (empty($email) || empty($first_name) || empty($last_name)) {
@@ -28,6 +28,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
             throw new Exception("Ungültige E-Mail-Adresse.");
         }
+
+        $first_name = validate_person_name($first_name, 'Vorname');
+        $last_name = validate_person_name($last_name, 'Nachname');
         
         // Check if email already exists in users
         $stmt = $pdo->prepare("SELECT id FROM users WHERE email = ?");
@@ -37,13 +40,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         
         // Check if email already has pending registration
-        $stmt = $pdo->prepare("SELECT id, status FROM registration_requests WHERE email = ?");
+        $stmt = $pdo->prepare("SELECT id, status, email_verified_at FROM registration_requests WHERE email = ? ORDER BY created_at DESC LIMIT 1");
         $stmt->execute([$email]);
-        $existing = $stmt->fetch();
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($existing) {
-            if ($existing['status'] === 'pending') {
+            if ($existing['status'] === 'pending' && !empty($existing['email_verified_at'])) {
                 throw new Exception("Für diese E-Mail-Adresse existiert bereits eine ausstehende Registrierungsanfrage.");
+            }
+
+            // Clean up legacy unverified rows from the old flow.
+            if ($existing['status'] === 'pending' && empty($existing['email_verified_at'])) {
+                $stmt = $pdo->prepare("DELETE FROM registration_requests WHERE email = ? AND status = 'pending' AND email_verified_at IS NULL");
+                $stmt->execute([$email]);
             }
             
             // Delete old approved/rejected request to allow re-registration
@@ -51,27 +60,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute([$email]);
         }
         
-        // Generate verification token
-        $verification_token = bin2hex(random_bytes(32)); // Generate verification token
+        // Create a signed token that carries validated registration data.
+        $verification_token = create_registration_verification_token($email, $first_name, $last_name);
         
-        // Insert registration request
-        $stmt = $pdo->prepare("
-            INSERT INTO registration_requests (email, first_name, last_name, token, status, created_at)
-            VALUES (?, ?, ?, ?, 'pending', NOW())
-        ");
-        $stmt->execute([$email, $first_name, $last_name, $verification_token]);
         
         // Send verification email to user
         $emailService = new EmailService();
         $result = $emailService->sendRegistrationConfirmation($email, $first_name, $verification_token);
         
         if (!$result['success']) {
-            error_log("Failed to send registration confirmation: " . $result['error']);
-            // Don't fail registration if email fails
+            throw new Exception("Bestätigungs-E-Mail konnte nicht gesendet werden. Bitte versuchen Sie es erneut.");
         }
         
-        // Send notification to admin
-        $adminResult = $emailService->sendAdminRegistrationNotification($email, $first_name, $last_name);
         
         $success_message = "Registrierung erfolgreich! Bitte überprüfen Sie Ihr E-Mail-Postfach und bestätigen Sie Ihre E-Mail-Adresse. Nach der Bestätigung wird ein Administrator Ihre Registrierung prüfen. <strong>⚠️ Hinweis: Kontrollieren Sie bitte auch den SPAM/Junk-Ordner Ihres E-Mail-Accounts, da Bestätigungsmails dort landen können.</strong>";
         
@@ -130,6 +130,9 @@ include 'includes/header.php';
                             <label for="first_name">Vorname <span class="required">*</span></label>
                             <input type="text" id="first_name" name="first_name" 
                                    value="<?php echo htmlspecialchars($_POST['first_name'] ?? ''); ?>" 
+                                   minlength="2" maxlength="30"
+                                   pattern="[A-ZÄÖÜ][a-zäöüß'\- ]+"
+                                   title="Bitte mit Großbuchstaben beginnen, danach nur Kleinbuchstaben (z. B. Max)."
                                    required>
                         </div>
                         
@@ -137,6 +140,9 @@ include 'includes/header.php';
                             <label for="last_name">Nachname <span class="required">*</span></label>
                             <input type="text" id="last_name" name="last_name" 
                                    value="<?php echo htmlspecialchars($_POST['last_name'] ?? ''); ?>" 
+                                   minlength="2" maxlength="30"
+                                   pattern="[A-ZÄÖÜ][a-zäöüß'\- ]+"
+                                   title="Bitte mit Großbuchstaben beginnen, danach nur Kleinbuchstaben (z. B. Muster)."
                                    required>
                         </div>
                         

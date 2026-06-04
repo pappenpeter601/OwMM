@@ -53,6 +53,132 @@ function sanitize_input($data) {
 }
 
 /**
+ * Encode bytes as URL-safe base64 without padding.
+ */
+function base64url_encode($data) {
+    return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+}
+
+/**
+ * Decode URL-safe base64 with optional missing padding.
+ */
+function base64url_decode($data) {
+    $padding = 4 - (strlen($data) % 4);
+    if ($padding < 4) {
+        $data .= str_repeat('=', $padding);
+    }
+
+    return base64_decode(strtr($data, '-_', '+/'), true);
+}
+
+/**
+ * Validate and normalize a personal name.
+ * Rules: starts uppercase, no further uppercase letters, and basic anti-gibberish heuristics.
+ */
+function validate_person_name($value, $fieldLabel = 'Name') {
+    $name = trim((string)$value);
+    $name = preg_replace('/\s+/u', ' ', $name);
+
+    if ($name === '' || mb_strlen($name) < 2 || mb_strlen($name) > 30) {
+        throw new Exception($fieldLabel . ' muss zwischen 2 und 30 Zeichen lang sein.');
+    }
+
+    if (!preg_match('/^[\p{L}][\p{L}\-\'\s]*$/u', $name)) {
+        throw new Exception($fieldLabel . ' enthält ungültige Zeichen.');
+    }
+
+    if (!preg_match('/^\p{Lu}/u', $name)) {
+        throw new Exception($fieldLabel . ' muss mit einem Großbuchstaben beginnen.');
+    }
+
+    if (preg_match('/\p{Lu}/u', mb_substr($name, 1))) {
+        throw new Exception($fieldLabel . ' darf innerhalb des Namens keine Großbuchstaben enthalten.');
+    }
+
+    $lettersOnly = mb_strtolower((string)preg_replace('/[^\p{L}]/u', '', $name));
+    if ($lettersOnly === '') {
+        throw new Exception($fieldLabel . ' ist ungültig.');
+    }
+
+    // Heuristic to reduce random bot strings without hard-blocking common names.
+    if (!preg_match('/[aeiouyäöüàáâãåæèéêëìíîïòóôõøœùúûüýÿ]/u', $lettersOnly)) {
+        throw new Exception($fieldLabel . ' wirkt nicht wie ein gültiger Name.');
+    }
+
+    if (preg_match('/(.)\1\1/u', $lettersOnly)) {
+        throw new Exception($fieldLabel . ' wirkt nicht wie ein gültiger Name.');
+    }
+
+    if (preg_match('/[bcdfghjklmnpqrstvwxyzß]{6,}/u', $lettersOnly)) {
+        throw new Exception($fieldLabel . ' wirkt nicht wie ein gültiger Name.');
+    }
+
+    return $name;
+}
+
+/**
+ * Create a signed registration verification token that carries registration data.
+ */
+function create_registration_verification_token($email, $firstName, $lastName, $ttlSeconds = 86400) {
+    $payload = [
+        'email' => (string)$email,
+        'first_name' => (string)$firstName,
+        'last_name' => (string)$lastName,
+        'iat' => time(),
+        'exp' => time() + (int)$ttlSeconds,
+    ];
+
+    $payloadJson = json_encode($payload, JSON_UNESCAPED_UNICODE);
+    if ($payloadJson === false) {
+        throw new Exception('Verifizierungsdaten konnten nicht erstellt werden.');
+    }
+
+    $payloadB64 = base64url_encode($payloadJson);
+    $signature = hash_hmac('sha256', $payloadB64, ENCRYPTION_KEY, true);
+    $signatureB64 = base64url_encode($signature);
+
+    return $payloadB64 . '.' . $signatureB64;
+}
+
+/**
+ * Validate and decode a signed registration verification token.
+ */
+function parse_registration_verification_token($token) {
+    $parts = explode('.', (string)$token, 2);
+    if (count($parts) !== 2) {
+        return null;
+    }
+
+    $payloadB64 = $parts[0];
+    $signatureB64 = $parts[1];
+    $expectedSig = base64url_encode(hash_hmac('sha256', $payloadB64, ENCRYPTION_KEY, true));
+
+    if (!hash_equals($expectedSig, $signatureB64)) {
+        return null;
+    }
+
+    $payloadJson = base64url_decode($payloadB64);
+    if ($payloadJson === false) {
+        return null;
+    }
+
+    $payload = json_decode($payloadJson, true);
+    if (!is_array($payload)) {
+        return null;
+    }
+
+    if (empty($payload['email']) || empty($payload['first_name']) || empty($payload['last_name']) || empty($payload['exp'])) {
+        return null;
+    }
+
+    if ((int)$payload['exp'] < time()) {
+        return null;
+    }
+
+    return $payload;
+}
+
+/**
  * Check if user is logged in
  */
 function is_logged_in() {
